@@ -41,6 +41,8 @@
   .mes { display: grid; grid-template-columns: 52px 1fr 86px; align-items: center; gap: 10px;
     font-size: 13px; padding: 5px 0; }
   .mes .bar { height: 10px; background: var(--sand); border-radius: 6px; overflow: hidden; }
+  .mes { cursor: pointer; border-radius: 8px; }
+  .mes.sel { background: var(--bg); }
   .mes .bar i { display: block; height: 100%; background: #b9d3e6; border-radius: 6px; }
   .mes span:last-child { text-align: right; }
   nav { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card);
@@ -124,6 +126,7 @@ async function cargar(v) {
   $("titulo").textContent = v === "inicio" ? "Inicio" : "Deuda";
   const d = await api(v);
   cache[v] = d;
+  if (v === "deuda") mesSel = 0;
   $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : htmlDeuda(d);
 }
 
@@ -145,16 +148,37 @@ function htmlInicio(d) {
     <div class="card">${venc}</div>`;
 }
 
+let mesSel = 0;
+const pct = (x) => (x * 100).toFixed(1).replace(".", ",") + "%";
+function selMes(i) { mesSel = i; $("vista").innerHTML = htmlDeuda(cache.deuda); }
+
 function htmlDeuda(d) {
-  const max = Math.max(1, ...d.meses.map(m => m.total));
-  const meses = d.meses.map(m => `<div class="mes"><span>${m.label}</span>
-    <div class="bar"><i style="width:${(m.total / max) * 100}%"></i></div><span>${money(m.total)}</span></div>`).join("");
-  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.origen || "sin origen"}</small></div>
+  const maxAbs = Math.max(1, ...d.meses.map(m => Math.abs(m.resultado)));
+  const barras = d.meses.map((m, i) => {
+    const color = m.resultado < 0 ? "var(--rose)" : m.vsMeta >= 0 ? "var(--green)" : "var(--sand)";
+    return `<div class="mes ${i === mesSel ? "sel" : ""}" onclick="selMes(${i})"><span>${m.label}</span>
+      <div class="bar"><i style="width:${Math.max(3, Math.abs(m.resultado) / maxAbs * 100)}%;background:${color}"></i></div>
+      <span>${pct(m.pct)}</span></div>`;
+  }).join("");
+  const m = d.meses[mesSel];
+  const lineas = m.lineas.map(l => `<div class="row"><span>${l.nombre}</span><span>${money(l.monto)}</span></div>`).join("");
+  const cumple = m.vsMeta >= 0;
+  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.tarjeta || "sin tarjeta"} · ${c.origen || "sin origen"}</small></div>
     <div>${money(c.monto)}</div></div>`).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
-    <div class="big neg" style="background:var(--sand)"><small>Deuda total en cuotas</small><b style="color:var(--text)">${money(d.total)}</b></div>
-    <h2>Próximos 12 meses</h2>
-    <div class="card">${meses}</div>
+    <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>
+    <h2>Resultado por mes (% del ingreso)</h2>
+    <div class="card">${barras}
+      <div class="vacio" style="text-align:left;padding-bottom:0">Verde: cumple el objetivo de ahorro · arena: ahorra pero no llega · rosa: negativo</div></div>
+    <h2>${m.label}</h2>
+    <div class="card">${lineas}
+      <div class="row" style="border-top:1px solid var(--line);margin-top:6px"><span>Total compromisos</span><span>${money(m.total)}</span></div>
+      <div class="row"><span>Ingreso</span><span>${money(m.ingreso)}</span></div>
+      <div class="row"><span><b>Resultado</b></span><span><b>${money(m.resultado)}</b></span></div>
+      <div class="row"><span>Objetivo ${pct(0.2)} del ingreso</span><span>${money(m.meta)}</span></div>
+      <div class="row"><span>${cumple ? "Sobre el objetivo" : "Falta para el objetivo"}</span>
+        <span style="color:${cumple ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(m.vsMeta))}</span></div>
+    </div>
     <h2>Cuotas activas</h2>
     <div class="card">${lista}</div>`;
 }

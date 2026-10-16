@@ -71,8 +71,18 @@ function apiInicio() {
   };
 }
 
+const META_AHORRO = 0.2; // objetivo: ahorrar el 20% del ingreso
+
 function apiDeuda() {
-  const datos = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const datos = ss.getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
+  const flujo = ss.getSheetByName("Flujo");
+  const ingreso = Number(flujo.getRange("B2").getValue()) || 0;
+  const pagoUnico = Number(flujo.getRange("B5").getValue()) || 0;
+
+  let fijos = 0;
+  ss.getSheetByName("Fijos").getRange("B2:B").getValues().forEach(r => { if (typeof r[0] === "number") fijos += r[0]; });
+
   const cuotas = [];
   for (let i = 1; i < datos.length; i++) {
     const nombre = String(datos[i][0]).trim();
@@ -80,16 +90,36 @@ function apiDeuda() {
     const monto = Number(datos[i][1]) || 0;
     const restantes = Number(datos[i][2]) || 0;
     if (!nombre || monto <= 0 || restantes <= 0) continue;
-    cuotas.push({ concepto: nombre, monto: monto, restantes: restantes, origen: datos[i][4] || "" });
+    cuotas.push({ concepto: nombre, monto: monto, restantes: restantes, origen: datos[i][4] || "", tarjeta: String(datos[i][5] || "").trim() });
   }
 
   const hoy = new Date();
   const meses = [];
   for (let k = 0; k < 12; k++) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth() + k, 1);
-    const total = cuotas.reduce((s, c) => s + (c.restantes > k ? c.monto : 0), 0);
-    meses.push({ label: MESES_ES[d.getMonth()] + " " + String(d.getFullYear()).slice(2), total: total });
+    const grupos = {};
+    let prestamo = 0, descuento = 0;
+    cuotas.forEach(c => {
+      if (c.restantes <= k || c.origen === "Ahorro") return;
+      if (/pr[eé]stamo/i.test(c.concepto)) { prestamo += c.monto; return; }
+      if (/termotanque/i.test(c.concepto)) descuento += c.monto; // el descuento de alquiler compensa la cuota
+      const nombre = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
+      grupos[nombre] = (grupos[nombre] || 0) + c.monto;
+    });
+    const lineas = [{ nombre: "Fijos", monto: fijos }];
+    if (prestamo) lineas.push({ nombre: "Préstamo", monto: prestamo });
+    if (descuento) lineas.push({ nombre: "Descuento alquiler (termotanque)", monto: -descuento });
+    Object.keys(grupos).forEach(n => lineas.push({ nombre: n + " – cuotas", monto: grupos[n] }));
+    if (k === 0 && pagoUnico) lineas.push({ nombre: "Otros consumos (un pago)", monto: pagoUnico });
+    const total = lineas.reduce((s, l) => s + l.monto, 0);
+    const resultado = ingreso - total;
+    const meta = ingreso * META_AHORRO;
+    meses.push({
+      label: MESES_ES[d.getMonth()] + " " + String(d.getFullYear()).slice(2),
+      lineas: lineas, total: total, ingreso: ingreso, resultado: resultado,
+      pct: ingreso ? resultado / ingreso : 0, meta: meta, vsMeta: resultado - meta
+    });
   }
-  const total = cuotas.reduce((s, c) => s + c.monto * c.restantes, 0);
-  return { total: total, meses: meses, cuotas: cuotas };
+  const deudaTotal = cuotas.reduce((s, c) => s + c.monto * c.restantes, 0);
+  return { total: deudaTotal, meses: meses, cuotas: cuotas };
 }

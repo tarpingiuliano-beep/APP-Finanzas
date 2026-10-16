@@ -1,5 +1,5 @@
 // Cachea solo la cáscara de la app. Los datos nunca se guardan: siempre se piden a la API.
-const CACHE = "finanzas-v1";
+const CACHE = "finanzas-v2";
 const SHELL = ["./", "index.html", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
