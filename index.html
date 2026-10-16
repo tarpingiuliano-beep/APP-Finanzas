@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#faf8f5">
+<title>Finanzas</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #faf8f5; --card: #ffffff; --line: #ece7e0;
+    --text: #3b3a38; --muted: #8c8780;
+    --blue: #d6e6f2; --green: #d7ecdc; --rose: #f4dcdc; --sand: #f1e8d8;
+    --ok: #4f8a63; --bad: #b86a6a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.4; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 96px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 4px 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 16px 18px; margin-bottom: 14px; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .row span:first-child { color: var(--muted); }
+  .big { text-align: center; padding: 22px 16px; border-radius: 16px; margin-bottom: 14px; }
+  .big small { display: block; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+  .big b { font-size: 30px; font-weight: 600; }
+  .pos { background: var(--green); } .pos b { color: var(--ok); }
+  .neg { background: var(--rose); } .neg b { color: var(--bad); }
+  h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 22px 4px 8px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .venc { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .venc:last-child { border-bottom: 0; }
+  .venc small { display: block; color: var(--muted); font-size: 12px; }
+  .pill { background: var(--blue); border-radius: 999px; padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+  .pill.hoy { background: var(--rose); }
+  .vacio { color: var(--muted); font-size: 14px; text-align: center; padding: 10px 0; }
+  .mes { display: grid; grid-template-columns: 52px 1fr 86px; align-items: center; gap: 10px;
+    font-size: 13px; padding: 5px 0; }
+  .mes .bar { height: 10px; background: var(--sand); border-radius: 6px; overflow: hidden; }
+  .mes .bar i { display: block; height: 100%; background: #b9d3e6; border-radius: 6px; }
+  .mes span:last-child { text-align: right; }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card);
+    border-top: 1px solid var(--line); display: flex; padding-bottom: env(safe-area-inset-bottom); }
+  nav button { flex: 1; border: 0; background: none; padding: 14px 0; font-size: 14px;
+    color: var(--muted); font-family: inherit; }
+  nav button.on { color: var(--text); font-weight: 600; background: var(--sand); }
+  .login { max-width: 340px; margin: 18vh auto 0; padding: 0 20px; text-align: center; }
+  .login input { width: 100%; padding: 13px 14px; font-size: 16px; border: 1px solid var(--line);
+    border-radius: 12px; background: var(--card); margin-bottom: 12px; }
+  .login button { width: 100%; padding: 13px; font-size: 16px; border: 0; border-radius: 12px;
+    background: var(--blue); color: var(--text); font-family: inherit; }
+  .err { color: var(--bad); font-size: 14px; min-height: 20px; margin-top: 10px; }
+  .hidden { display: none; }
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .top button { border: 0; background: none; color: var(--muted); font-size: 13px; font-family: inherit; }
+</style>
+</head>
+<body>
+
+<div id="login" class="login hidden">
+  <h1>Finanzas</h1>
+  <form id="formLogin" autocomplete="on">
+    <input type="text" name="username" value="finanzas" autocomplete="username" class="hidden" aria-hidden="true">
+    <input type="password" id="clave" name="password" placeholder="Contraseña" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+  </form>
+  <div class="err" id="err"></div>
+</div>
+
+<div id="app" class="wrap hidden">
+  <div class="top"><h1 id="titulo">Inicio</h1><button id="salir">Salir</button></div>
+  <div id="vista"></div>
+</div>
+
+<nav id="nav" class="hidden">
+  <button data-v="inicio" class="on">Inicio</button>
+  <button data-v="deuda">Deuda</button>
+</nav>
+
+<script src="config.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const money = (n) => "$" + Number(n || 0).toLocaleString("es-AR", { maximumFractionDigits: 0 });
+let clave = null, vistaActual = "inicio";
+const cache = {};
+
+function guardar(c) { try { sessionStorage.setItem("k", c); } catch (e) {} }
+function leer() { try { return sessionStorage.getItem("k"); } catch (e) { return null; } }
+
+async function api(accion) {
+  if (!window.API_URL) throw new Error("Falta configurar API_URL en config.js");
+  const r = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ clave, accion })
+  });
+  const d = await r.json();
+  if (!d.ok) throw new Error(d.error || "Error");
+  return d.data;
+}
+
+function mostrarLogin(msg) {
+  $("app").classList.add("hidden"); $("nav").classList.add("hidden");
+  $("login").classList.remove("hidden"); $("err").textContent = msg || "";
+}
+
+async function entrar(c) {
+  clave = c;
+  try {
+    await cargar("inicio");
+    guardar(c);
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden"); $("nav").classList.remove("hidden");
+  } catch (e) { clave = null; mostrarLogin(e.message); }
+}
+
+async function cargar(v) {
+  vistaActual = v;
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  $("titulo").textContent = v === "inicio" ? "Inicio" : "Deuda";
+  const d = await api(v);
+  cache[v] = d;
+  $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : htmlDeuda(d);
+}
+
+function htmlInicio(d) {
+  const venc = d.vencimientos.length ? d.vencimientos.map(v => {
+    const cuando = v.dias === 0 ? "hoy" : v.dias === 1 ? "mañana" : "en " + v.dias + " días";
+    return `<div class="venc"><div>${v.concepto}<small>${v.fecha}</small></div>
+      <div style="text-align:right">${money(v.monto)}<br><span class="pill ${v.dias === 0 ? "hoy" : ""}">${cuando}</span></div></div>`;
+  }).join("") : `<div class="vacio">Sin vencimientos cargados</div>`;
+  return `
+    <div class="big ${d.resultado >= 0 ? "pos" : "neg"}"><small>Resultado de ${d.mes}</small><b>${money(d.resultado)}</b></div>
+    <div class="card">
+      <div class="row"><span>Ingreso neto</span><span>${money(d.ingreso)}</span></div>
+      <div class="row"><span>Fijos</span><span>${money(d.fijos)}</span></div>
+      <div class="row"><span>Cuotas</span><span>${money(d.cuotas)}</span></div>
+      <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
+    </div>
+    <h2>Próximos vencimientos</h2>
+    <div class="card">${venc}</div>`;
+}
+
+function htmlDeuda(d) {
+  const max = Math.max(1, ...d.meses.map(m => m.total));
+  const meses = d.meses.map(m => `<div class="mes"><span>${m.label}</span>
+    <div class="bar"><i style="width:${(m.total / max) * 100}%"></i></div><span>${money(m.total)}</span></div>`).join("");
+  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.origen || "sin origen"}</small></div>
+    <div>${money(c.monto)}</div></div>`).join("") || `<div class="vacio">Sin cuotas</div>`;
+  return `
+    <div class="big neg" style="background:var(--sand)"><small>Deuda total en cuotas</small><b style="color:var(--text)">${money(d.total)}</b></div>
+    <h2>Próximos 12 meses</h2>
+    <div class="card">${meses}</div>
+    <h2>Cuotas activas</h2>
+    <div class="card">${lista}</div>`;
+}
+
+$("formLogin").addEventListener("submit", (e) => { e.preventDefault(); entrar($("clave").value); });
+$("salir").addEventListener("click", () => { try { sessionStorage.removeItem("k"); } catch (e) {} clave = null; mostrarLogin(); });
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => cargar(b.dataset.v).catch(e => mostrarLogin(e.message))));
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+const k = leer();
+if (k) entrar(k); else mostrarLogin();
+</script>
+</body>
+</html>
