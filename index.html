@@ -163,7 +163,7 @@ function htmlDeuda(d) {
   const m = d.meses[mesSel];
   const lineas = m.lineas.map(l => `<div class="row"><span>${l.nombre}</span><span>${money(l.monto)}</span></div>`).join("");
   const cumple = m.vsMeta >= 0;
-  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.tarjeta || "sin tarjeta"} · ${c.origen || "sin origen"}</small></div>
+  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.tarjeta || "sin tarjeta"}</small></div>
     <div>${money(c.monto)}</div></div>`).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
     <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>

@@ -90,7 +90,7 @@ function apiDeuda() {
     const monto = Number(datos[i][1]) || 0;
     const restantes = Number(datos[i][2]) || 0;
     if (!nombre || monto <= 0 || restantes <= 0) continue;
-    cuotas.push({ concepto: nombre, monto: monto, restantes: restantes, origen: datos[i][4] || "", tarjeta: String(datos[i][5] || "").trim() });
+    cuotas.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim() });
   }
 
   const hoy = new Date();
@@ -100,7 +100,7 @@ function apiDeuda() {
     const grupos = {};
     let prestamo = 0, descuento = 0;
     cuotas.forEach(c => {
-      if (c.restantes <= k || c.origen === "Ahorro") return;
+      if (c.restantes <= k) return;
       if (/pr[eé]stamo/i.test(c.concepto)) { prestamo += c.monto; return; }
       if (/termotanque/i.test(c.concepto)) descuento += c.monto; // el descuento de alquiler compensa la cuota
       const nombre = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
