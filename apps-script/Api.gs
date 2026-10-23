@@ -40,11 +40,20 @@ function aFecha(v) {
   return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
 }
 
+// Lee Flujo por etiqueta (columna A), sin depender de qué fila ocupa cada concepto.
+function leerFlujo() {
+  const v = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Flujo").getRange("A1:B15").getValues();
+  const get = (re) => { for (let i = 1; i < v.length; i++) if (re.test(String(v[i][0]))) return Number(v[i][1]) || 0; return 0; };
+  const f = { mesRaw: v[0][1], ingreso: get(/^ingreso/i), fijos: get(/fijos/i), cuotas: get(/^total cuotas/i), pagoUnico: get(/pago [uú]nico/i) };
+  f.resultado = f.ingreso - f.fijos - f.cuotas - f.pagoUnico;
+  return f;
+}
+
 function apiInicio() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const tz = Session.getScriptTimeZone();
-  const f = ss.getSheetByName("Flujo").getRange("A1:B6").getValues();
-  const mesRaw = f[0][1];
+  const f = leerFlujo();
+  const mesRaw = f.mesRaw;
   const mes = (mesRaw instanceof Date) ? MESES_LARGO[mesRaw.getMonth()] + " " + mesRaw.getFullYear() : String(mesRaw);
 
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
@@ -65,8 +74,8 @@ function apiInicio() {
   vencimientos.forEach(v => delete v._t);
 
   return {
-    mes: mes, ingreso: f[1][1], fijos: f[2][1], cuotas: f[3][1],
-    pagoUnico: f[4][1] || 0, resultado: f[5][1],
+    mes: mes, ingreso: f.ingreso, fijos: f.fijos, cuotas: f.cuotas,
+    pagoUnico: f.pagoUnico, resultado: f.resultado,
     vencimientos: vencimientos.slice(0, 10)
   };
 }
@@ -76,9 +85,9 @@ const META_AHORRO = 0.2; // objetivo: ahorrar el 20% del ingreso
 function apiDeuda() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const datos = ss.getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
-  const flujo = ss.getSheetByName("Flujo");
-  const ingreso = Number(flujo.getRange("B2").getValue()) || 0;
-  const pagoUnico = Number(flujo.getRange("B5").getValue()) || 0;
+  const flujo = leerFlujo();
+  const ingreso = flujo.ingreso;
+  const pagoUnico = flujo.pagoUnico;
 
   let fijos = 0;
   ss.getSheetByName("Fijos").getRange("B2:B").getValues().forEach(r => { if (typeof r[0] === "number") fijos += r[0]; });
