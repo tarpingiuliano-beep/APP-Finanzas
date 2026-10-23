@@ -2,7 +2,8 @@
 // Borra de la hoja Facturas las filas que ya cumplieron su ciclo: rescate y pago avisados
 // y vencimiento ya pasado. Antes de borrar guarda, por concepto, el último vencimiento cargado
 // (propiedad ULTIMA_CARGA), que después sirve para los recordatorios de carga inteligentes.
-// Correr instalarLimpieza() UNA vez para crear el trigger diario.
+// Se programa desde Activadores (limpiarFacturas, según tiempo, diario), no desde código,
+// para no pedir permisos extra.
 
 function limpiarFacturas() {
   const hoja = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FACTURAS);
@@ -26,9 +27,4 @@ function limpiarFacturas() {
   }
   props.setProperty("ULTIMA_CARGA", JSON.stringify(ultima));
   return borradas;
-}
-
-function instalarLimpieza() {
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === "limpiarFacturas").forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger("limpiarFacturas").timeBased().everyDays(1).atHour(3).create();
 }
