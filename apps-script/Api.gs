@@ -26,6 +26,7 @@ function doPost(e) {
     if (body.accion === "cargar") return respuesta({ ok: true, data: apiCargar(body.datos || {}) });
     if (body.accion === "leerFoto") return respuesta({ ok: true, data: apiLeerFoto(body.datos || {}) });
     if (body.accion === "cargarFactura") return respuesta({ ok: true, data: apiCargarFactura(body.datos || {}) });
+    if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
     return respuesta({ ok: false, error: "Acción desconocida" });
   } catch (err) {
     return respuesta({ ok: false, error: "Error: " + err.message });
@@ -79,7 +80,8 @@ function apiInicio() {
   return {
     mes: mes, ingreso: f.ingreso, fijos: f.fijos, cuotas: f.cuotas,
     pagoUnico: f.pagoUnico, resultado: f.resultado,
-    vencimientos: vencimientos.slice(0, 10)
+    vencimientos: vencimientos.slice(0, 10),
+    recordatorios: recordatoriosCarga(hoy)
   };
 }
 
@@ -231,6 +233,7 @@ function apiCargarFactura(d) {
   const rescate = restarDiasHabiles(vto, 2);
   const pago = new Date(vto); pago.setDate(pago.getDate() - 1);
   hoja.appendRow([concepto, categoriaFactura(concepto), monto, fechaTxt(vto), fechaTxt(rescate), "Pendiente", fechaTxt(pago), "Pendiente"]);
+  actualizarCadencia(concepto, vto);
   return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago) };
 }
 
@@ -293,4 +296,59 @@ function apiLeerFoto(d) {
   })).filter(it => it.concepto && it.monto > 0);
   if (!limpios.length) throw new Error("No encontré consumos en la imagen.");
   return { modo: "consumo", items: limpios };
+}
+
+// ==== Recordatorios inteligentes de carga ====
+// Por cada concepto se guarda el último vencimiento cargado y cada cuántos días suele repetirse
+// (propiedad CADENCIA_CARGA). Arranca en 30 días y se ajusta sola con cada nueva carga.
+// El recordatorio aparece ANTICIPO_CARGA días antes del vencimiento esperado y queda hasta que se cargue.
+const ANTICIPO_CARGA = 12;
+
+function leerCadencias() {
+  const props = PropertiesService.getScriptProperties();
+  const crudo = props.getProperty("CADENCIA_CARGA");
+  if (crudo) return JSON.parse(crudo);
+  // Primera vez: se siembra con lo que dejó la limpieza de Facturas (ULTIMA_CARGA).
+  const cad = {};
+  const ultima = JSON.parse(props.getProperty("ULTIMA_CARGA") || "{}");
+  Object.keys(ultima).forEach(n => { cad[n.trim().toLowerCase()] = { nombre: n.trim(), vto: ultima[n], dias: 30 }; });
+  props.setProperty("CADENCIA_CARGA", JSON.stringify(cad));
+  return cad;
+}
+
+function actualizarCadencia(concepto, vto) {
+  const cad = leerCadencias();
+  const k = concepto.trim().toLowerCase();
+  const prev = cad[k];
+  let dias = 30;
+  if (prev) {
+    const p = aFecha(prev.vto);
+    if (p && vto <= p) return;                             // fecha anterior a la ya registrada: no cambia nada
+    dias = prev.dias || 30;
+    const diff = p ? Math.round((vto - p) / 86400000) : 0;
+    if (diff >= 20 && diff <= 45) dias = diff;
+  }
+  cad[k] = { nombre: concepto.trim(), vto: fechaTxt(vto), dias: dias };
+  PropertiesService.getScriptProperties().setProperty("CADENCIA_CARGA", JSON.stringify(cad));
+}
+
+function recordatoriosCarga(hoy) {
+  const cad = leerCadencias();
+  const out = [];
+  Object.keys(cad).forEach(k => {
+    const ultimo = aFecha(cad[k].vto);
+    if (!ultimo) return;
+    const aviso = new Date(ultimo);
+    aviso.setDate(aviso.getDate() + (cad[k].dias || 30) - ANTICIPO_CARGA);
+    if (hoy >= aviso) out.push({ clave: k, concepto: cad[k].nombre, ultimoVto: fechaTxt(ultimo), atraso: Math.round((hoy - aviso) / 86400000) });
+  });
+  out.sort((a, b) => b.atraso - a.atraso);
+  return out;
+}
+
+function quitarRecordatorio(d) {
+  const cad = leerCadencias();
+  delete cad[String(d.clave || "")];
+  PropertiesService.getScriptProperties().setProperty("CADENCIA_CARGA", JSON.stringify(cad));
+  return { quitado: true };
 }

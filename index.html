@@ -78,6 +78,8 @@
   .item .acc button { flex: 1; padding: 11px; font-size: 15px; border: 0; border-radius: 12px; font-family: inherit; color: var(--text); }
   .item .guardar { background: var(--green); } .item .descartar { background: var(--sand); }
   .item.hecho { opacity: .55; }
+  .mini { border: 0; border-radius: 10px; padding: 8px 12px; font-size: 13px; background: var(--sand); color: var(--text); font-family: inherit; }
+  .mini.ir { background: var(--blue); }
   .ok { color: var(--ok); } .mal { color: var(--bad); }
 </style>
 </head>
@@ -166,8 +168,29 @@ function htmlInicio(d) {
       <div class="row"><span>Cuotas</span><span>${money(d.cuotas)}</span></div>
       <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
     </div>
+    ${recordatorios(d)}
     <h2>Próximos vencimientos</h2>
     <div class="card">${venc}</div>`;
+}
+
+function recordatorios(d) {
+  const r = d.recordatorios || [];
+  if (!r.length) return "";
+  return `<h2>Falta cargar</h2><div class="card">` + r.map((x, i) => `<div class="venc"><div>${esc(x.concepto)}<small>Último vencimiento ${fechaCorta(x.ultimoVto)}</small></div>
+    <div style="display:flex;gap:6px"><button class="mini" onclick="quitarRec(${i})">Ya no</button><button class="mini ir" onclick="irCargar(${i})">Cargar</button></div></div>`).join("") + `</div>`;
+}
+
+async function irCargar(i) {
+  const x = cache.inicio.recordatorios[i];
+  tipoCarga = "factura";
+  await cargar("cargar");
+  $("cConcepto").value = x.concepto;
+  $("cMonto").focus();
+}
+
+async function quitarRec(i) {
+  const x = cache.inicio.recordatorios[i];
+  try { await api("quitarRecordatorio", { clave: x.clave }); await cargar("inicio"); } catch (e) { alert(e.message); }
 }
 
 let mesSel = 0;
