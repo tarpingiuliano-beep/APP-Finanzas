@@ -70,6 +70,14 @@
     color: var(--text); font-family: inherit; }
   .btn:disabled { opacity: .5; }
   .nota { color: var(--muted); font-size: 13px; margin: 2px 4px 14px; min-height: 18px; }
+  .btn2 { display: block; text-align: center; margin-top: 10px; background: var(--card); border: 1px solid var(--line); }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-top: 12px; }
+  .item .fila { display: flex; gap: 8px; }
+  .item .fila > * { flex: 1; min-width: 0; }
+  .item .acc { display: flex; gap: 8px; margin-top: 10px; }
+  .item .acc button { flex: 1; padding: 11px; font-size: 15px; border: 0; border-radius: 12px; font-family: inherit; color: var(--text); }
+  .item .guardar { background: var(--green); } .item .descartar { background: var(--sand); }
+  .item.hecho { opacity: .55; }
   .ok { color: var(--ok); } .mal { color: var(--bad); }
 </style>
 </head>
@@ -214,7 +222,10 @@ function htmlCargar() {
       <div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(t => `<option>${t}</option>`).join("")}</select></div>
     </div>
     <div class="nota" id="cNota"></div>
-    <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>`;
+    <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>
+    <label class="btn btn2" for="cFoto">Leer desde foto</label>
+    <input type="file" id="cFoto" accept="image/*" class="hidden" onchange="leerFoto(this)">
+    <div id="cItems"></div>`;
 }
 
 function setTipo(t) { tipoCarga = t; $("vista").innerHTML = htmlCargar(); }
@@ -242,6 +253,65 @@ async function enviarCarga() {
     await api("cargar", datos);
     $("vista").innerHTML = htmlCargar();
     $("cNota").className = "nota ok"; $("cNota").textContent = `Guardado: ${datos.concepto} · ${money(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""}`;
+  } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
+}
+
+// Reduce la foto antes de enviarla (más rápido y más liviano).
+function reducirImagen(file) {
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1400 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL("image/jpeg", 0.8).split(",")[1]);
+    };
+    img.onerror = () => rej(new Error("No pude abrir la imagen"));
+    img.src = url;
+  });
+}
+
+let propuestas = [];
+async function leerFoto(inp) {
+  const f = inp.files[0]; if (!f) return;
+  const nota = $("cNota"); nota.className = "nota"; nota.textContent = "Leyendo comprobante…";
+  try {
+    const imagen = await reducirImagen(f);
+    const r = await api("leerFoto", { imagen });
+    propuestas = r.items;
+    nota.textContent = `Encontré ${propuestas.length} consumo(s). Revisá y guardá cada uno.`;
+    $("cItems").innerHTML = propuestas.map((p, i) => htmlItem(p, i)).join("");
+  } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
+  inp.value = "";
+}
+
+function htmlItem(p, i) {
+  return `<div class="item" id="it${i}">
+    <div class="campo"><label>Concepto</label><input id="iC${i}" type="text" value="${String(p.concepto).replace(/"/g, "&quot;")}"></div>
+    <div class="fila">
+      <div class="campo"><label>Monto cuota</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}"></div>
+      <div class="campo"><label>Cuotas</label><input id="iN${i}" type="number" inputmode="numeric" min="1" max="36" value="${p.cuotas}"></div>
+    </div>
+    <div class="campo"><label>Tarjeta</label><select id="iT${i}"><option value="">Elegir…</option>${TARJETAS.map(t => `<option ${t === p.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class="nota" id="iNota${i}"></div>
+    <div class="acc"><button class="descartar" onclick="descartar(${i})">Descartar</button><button class="guardar" id="iG${i}" onclick="guardarItem(${i})">Guardar</button></div>
+  </div>`;
+}
+
+function descartar(i) { $("it" + i).remove(); }
+
+async function guardarItem(i) {
+  const n = Number($("iN" + i).value), nota = $("iNota" + i), btn = $("iG" + i);
+  const datos = { tipo: n >= 2 ? "cuotas" : "unico", concepto: $("iC" + i).value.trim(),
+    monto: leerMonto($("iM" + i).value), cuotas: n, tarjeta: $("iT" + i).value };
+  if (!datos.concepto || !(datos.monto > 0) || !datos.tarjeta) { nota.className = "nota mal"; nota.textContent = "Completá concepto, monto y tarjeta."; return; }
+  btn.disabled = true; nota.className = "nota"; nota.textContent = "Guardando…";
+  try {
+    await api("cargar", datos);
+    const el = $("it" + i); el.classList.add("hecho");
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${datos.concepto} · ${money(datos.monto)}${n >= 2 ? " × " + n : ""}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
