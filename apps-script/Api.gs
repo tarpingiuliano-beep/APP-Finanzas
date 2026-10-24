@@ -23,6 +23,7 @@ function doPost(e) {
     }
     if (body.accion === "inicio") return respuesta({ ok: true, data: apiInicio() });
     if (body.accion === "deuda") return respuesta({ ok: true, data: apiDeuda() });
+    if (body.accion === "cargar") return respuesta({ ok: true, data: apiCargar(body.datos || {}) });
     return respuesta({ ok: false, error: "Acción desconocida" });
   } catch (err) {
     return respuesta({ ok: false, error: "Error: " + err.message });
@@ -131,4 +132,65 @@ function apiDeuda() {
   }
   const deudaTotal = cuotas.reduce((s, c) => s + c.monto * c.restantes, 0);
   return { total: deudaTotal, meses: meses, cuotas: cuotas };
+}
+
+// ==== Carga desde la app: consumos en cuotas y consumos de un solo pago ====
+const TARJETAS = ["Banco Ciudad", "Mercado Pago"];
+
+function apiCargar(d) {
+  const concepto = String(d.concepto || "").trim();
+  const monto = Number(d.monto);
+  const tarjeta = String(d.tarjeta || "").trim();
+  if (!concepto) throw new Error("Falta el concepto");
+  if (!(monto > 0)) throw new Error("El monto debe ser mayor a 0");
+  if (TARJETAS.indexOf(tarjeta) < 0) throw new Error("Tarjeta inválida");
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  if (d.tipo === "cuotas") {
+    const n = Math.floor(Number(d.cuotas));
+    if (!(n >= 2 && n <= 36)) throw new Error("Las cuotas deben ser entre 2 y 36");
+    const hoja = ss.getSheetByName(SHEET_CUOTAS);
+    const col = hoja.getRange(1, 1, hoja.getLastRow(), 1).getValues();
+    let total = -1;
+    for (let i = 1; i < col.length; i++) {
+      if (String(col[i][0]).trim().toLowerCase() === "total") { total = i + 1; break; }
+    }
+    if (total < 0) throw new Error("No encuentro la fila Total en Cuotas");
+    hoja.insertRowBefore(total);                         // la fila nueva ocupa el lugar del Total
+    const fila = total;
+    if (fila > 2) hoja.getRange(fila - 1, 1, 1, 5).copyTo(hoja.getRange(fila, 1, 1, 5), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    hoja.getRange(fila, 1, 1, 3).setValues([[concepto, monto, n]]);
+    hoja.getRange(fila, 4).setFormula('=IF(C' + fila + '=0,"PAGADA","")');
+    hoja.getRange(fila, 5).setValue(tarjeta);
+    hoja.getRange(fila + 1, 2).setFormula("=SUM(B2:B" + fila + ")");
+    return { guardado: "cuotas" };
+  }
+
+  if (d.tipo === "unico") {
+    let hoja = ss.getSheetByName("Consumos");
+    if (!hoja) {
+      hoja = ss.insertSheet("Consumos");
+      hoja.getRange(1, 1, 1, 4).setValues([["Fecha", "Concepto", "Monto", "Tarjeta"]]).setFontWeight("bold");
+      hoja.getRange("A2:A").setNumberFormat("dd/MM/yyyy");
+      hoja.getRange("C2:C").setNumberFormat("$#,##0");
+    }
+    hoja.appendRow([new Date(), concepto, monto, tarjeta]);
+    enlazarPagoUnico();
+    return { guardado: "unico" };
+  }
+  throw new Error("Tipo desconocido");
+}
+
+// Flujo → "Pago Único" suma sola los consumos de un pago del mes en curso (hoja Consumos).
+function enlazarPagoUnico() {
+  const hoja = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Flujo");
+  const a = hoja.getRange("A1:A15").getValues();
+  for (let i = 0; i < a.length; i++) {
+    if (!/pago [uú]nico/i.test(String(a[i][0]))) continue;
+    const celda = hoja.getRange(i + 1, 2);
+    if (celda.getFormula().indexOf("Consumos") >= 0) return;                 // ya enlazado
+    if (celda.getFormula() === "" && celda.getValue() !== "") return;        // hay un valor escrito a mano: no lo piso
+    celda.setFormula('=SUMIFS(Consumos!C2:C,Consumos!A2:A,">="&DATE(YEAR(TODAY()),MONTH(TODAY()),1),Consumos!A2:A,"<"&DATE(YEAR(TODAY()),MONTH(TODAY())+1,1))');
+    return;
+  }
 }
