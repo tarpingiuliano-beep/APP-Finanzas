@@ -206,20 +206,22 @@ function htmlDeuda(d) {
 }
 
 const TARJETAS = ["Banco Ciudad", "Mercado Pago"];
+const OBLIGACIONES = ["Movistar", "Luz", "Gas", "Agua", "Universidad", "Monotributo", "Préstamo", "Tarjeta Banco Ciudad", "Tarjeta Mercado Pago"];
 let tipoCarga = "cuotas";
+const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 function htmlCargar() {
-  const cuotas = tipoCarga === "cuotas";
+  const t = tipoCarga, cuotas = t === "cuotas", fac = t === "factura";
+  const btn = (k, txt) => `<button class="${t === k ? "on" : ""}" onclick="setTipo('${k}')">${txt}</button>`;
   return `
-    <div class="seg">
-      <button class="${cuotas ? "on" : ""}" onclick="setTipo('cuotas')">En cuotas</button>
-      <button class="${!cuotas ? "on" : ""}" onclick="setTipo('unico')">Un pago</button>
-    </div>
+    <div class="seg">${btn("cuotas", "En cuotas")}${btn("unico", "Un pago")}${btn("factura", "Factura")}</div>
     <div class="card">
-      <div class="campo"><label>Concepto</label><input id="cConcepto" type="text" autocomplete="off" placeholder="Ej: Zapatillas"></div>
-      <div class="campo"><label>${cuotas ? "Monto de la cuota" : "Monto"}</label><input id="cMonto" type="text" inputmode="decimal" autocomplete="off" placeholder="0" oninput="previa()"></div>
+      <div class="campo"><label>Concepto</label><input id="cConcepto" type="text" autocomplete="off" ${fac ? 'list="obligaciones"' : ""} placeholder="${fac ? "Ej: Luz" : "Ej: Zapatillas"}"></div>
+      ${fac ? `<datalist id="obligaciones">${OBLIGACIONES.map(o => `<option value="${o}">`).join("")}</datalist>` : ""}
+      <div class="campo"><label>${cuotas ? "Monto de la cuota" : fac ? "Monto a pagar" : "Monto"}</label><input id="cMonto" type="text" inputmode="decimal" autocomplete="off" placeholder="0" oninput="previa()"></div>
       ${cuotas ? `<div class="campo"><label>Cantidad de cuotas</label><input id="cCuotas" type="number" inputmode="numeric" min="2" max="36" placeholder="Ej: 6" oninput="previa()"></div>` : ""}
-      <div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(t => `<option>${t}</option>`).join("")}</select></div>
+      ${fac ? `<div class="campo"><label>Vencimiento</label><input id="cVto" type="date" onchange="previa()"></div>`
+            : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
     </div>
     <div class="nota" id="cNota"></div>
     <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>
@@ -232,27 +234,29 @@ function setTipo(t) { tipoCarga = t; $("vista").innerHTML = htmlCargar(); }
 
 // Acepta "45833", "45.833" o "45.833,50".
 function leerMonto(txt) { return Number(String(txt || "").replace(/\./g, "").replace(",", ".")); }
+function fechaCorta(iso) { const [a, m, d] = String(iso).split("-"); return `${d}/${m}`; }
 
 function previa() {
   const m = leerMonto($("cMonto").value);
   const n = $("cCuotas") ? Number($("cCuotas").value) : 0;
   $("cNota").className = "nota";
-  $("cNota").textContent = tipoCarga === "cuotas" && m > 0 && n >= 2
-    ? `${n} cuotas de ${money(m)} · total ${money(m * n)}` : "";
+  $("cNota").textContent = tipoCarga === "cuotas" && m > 0 && n >= 2 ? `${n} cuotas de ${money(m)} · total ${money(m * n)}` : "";
 }
 
 async function enviarCarga() {
+  const nota = $("cNota"), btn = $("cBtn"), fac = tipoCarga === "factura";
   const datos = { tipo: tipoCarga, concepto: $("cConcepto").value.trim(), monto: leerMonto($("cMonto").value),
-    tarjeta: $("cTarjeta").value, cuotas: $("cCuotas") ? Number($("cCuotas").value) : 1 };
-  const nota = $("cNota"), btn = $("cBtn");
-  if (!datos.concepto || !(datos.monto > 0) || (tipoCarga === "cuotas" && !(datos.cuotas >= 2))) {
-    nota.className = "nota mal"; nota.textContent = "Completá concepto, monto" + (tipoCarga === "cuotas" ? " y cuotas." : "."); return;
-  }
+    tarjeta: $("cTarjeta") ? $("cTarjeta").value : "", cuotas: $("cCuotas") ? Number($("cCuotas").value) : 1,
+    vencimiento: $("cVto") ? $("cVto").value : "" };
+  const falta = !datos.concepto || !(datos.monto > 0) || (tipoCarga === "cuotas" && !(datos.cuotas >= 2)) || (fac && !datos.vencimiento);
+  if (falta) { nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return; }
   btn.disabled = true; nota.className = "nota"; nota.textContent = "Guardando…";
   try {
-    await api("cargar", datos);
+    const r = await api(fac ? "cargarFactura" : "cargar", datos);
     $("vista").innerHTML = htmlCargar();
-    $("cNota").className = "nota ok"; $("cNota").textContent = `Guardado: ${datos.concepto} · ${money(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""}`;
+    $("cNota").className = "nota ok";
+    $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}`
+      : `Guardado: ${datos.concepto} · ${money(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""}`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
@@ -273,28 +277,35 @@ function reducirImagen(file) {
   });
 }
 
-let propuestas = [];
+let modoItems = "consumo";
 async function leerFoto(inp) {
   const f = inp.files[0]; if (!f) return;
   const nota = $("cNota"); nota.className = "nota"; nota.textContent = "Leyendo comprobante…";
   try {
     const imagen = await reducirImagen(f);
-    const r = await api("leerFoto", { imagen });
-    propuestas = r.items;
-    nota.textContent = `Encontré ${propuestas.length} consumo(s). Revisá y guardá cada uno.`;
-    $("cItems").innerHTML = propuestas.map((p, i) => htmlItem(p, i)).join("");
+    const r = await api("leerFoto", { imagen, modo: tipoCarga === "factura" ? "factura" : "consumo" });
+    modoItems = r.modo;
+    nota.textContent = `Encontré ${r.items.length} ${modoItems === "factura" ? "factura(s)" : "consumo(s)"}. Revisá y guardá cada una.`;
+    $("cItems").innerHTML = r.items.map((p, i) => htmlItem(p, i)).join("");
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
   inp.value = "";
 }
 
 function htmlItem(p, i) {
-  return `<div class="item" id="it${i}">
-    <div class="campo"><label>Concepto</label><input id="iC${i}" type="text" value="${String(p.concepto).replace(/"/g, "&quot;")}"></div>
+  const fac = modoItems === "factura";
+  const campos = fac ? `
+    <div class="fila">
+      <div class="campo"><label>Monto</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}"></div>
+      <div class="campo"><label>Vencimiento</label><input id="iV${i}" type="date" value="${p.vencimiento}"></div>
+    </div>` : `
     <div class="fila">
       <div class="campo"><label>Monto cuota</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}"></div>
       <div class="campo"><label>Cuotas</label><input id="iN${i}" type="number" inputmode="numeric" min="1" max="36" value="${p.cuotas}"></div>
     </div>
-    <div class="campo"><label>Tarjeta</label><select id="iT${i}"><option value="">Elegir…</option>${TARJETAS.map(t => `<option ${t === p.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class="campo"><label>Tarjeta</label><select id="iT${i}"><option value="">Elegir…</option>${TARJETAS.map(t => `<option ${t === p.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
+  return `<div class="item" id="it${i}">
+    <div class="campo"><label>Concepto</label><input id="iC${i}" type="text" value="${esc(p.concepto)}"></div>
+    ${campos}
     <div class="nota" id="iNota${i}"></div>
     <div class="acc"><button class="descartar" onclick="descartar(${i})">Descartar</button><button class="guardar" id="iG${i}" onclick="guardarItem(${i})">Guardar</button></div>
   </div>`;
@@ -303,15 +314,18 @@ function htmlItem(p, i) {
 function descartar(i) { $("it" + i).remove(); }
 
 async function guardarItem(i) {
-  const n = Number($("iN" + i).value), nota = $("iNota" + i), btn = $("iG" + i);
-  const datos = { tipo: n >= 2 ? "cuotas" : "unico", concepto: $("iC" + i).value.trim(),
-    monto: leerMonto($("iM" + i).value), cuotas: n, tarjeta: $("iT" + i).value };
-  if (!datos.concepto || !(datos.monto > 0) || !datos.tarjeta) { nota.className = "nota mal"; nota.textContent = "Completá concepto, monto y tarjeta."; return; }
+  const fac = modoItems === "factura", nota = $("iNota" + i), btn = $("iG" + i);
+  const n = fac ? 1 : Number($("iN" + i).value);
+  const datos = { tipo: n >= 2 ? "cuotas" : "unico", concepto: $("iC" + i).value.trim(), monto: leerMonto($("iM" + i).value), cuotas: n,
+    tarjeta: fac ? "" : $("iT" + i).value, vencimiento: fac ? $("iV" + i).value : "" };
+  if (!datos.concepto || !(datos.monto > 0) || (fac ? !datos.vencimiento : !datos.tarjeta)) {
+    nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return;
+  }
   btn.disabled = true; nota.className = "nota"; nota.textContent = "Guardando…";
   try {
-    await api("cargar", datos);
+    const r = await api(fac ? "cargarFactura" : "cargar", datos);
     const el = $("it" + i); el.classList.add("hecho");
-    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${datos.concepto} · ${money(datos.monto)}${n >= 2 ? " × " + n : ""}</div>`;
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : n >= 2 ? " × " + n : ""}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
