@@ -107,6 +107,8 @@
 </nav>
 
 <script src="config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-AR", { maximumFractionDigits: 0 });
@@ -169,6 +171,7 @@ function htmlInicio(d) {
       <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
     </div>
     ${recordatorios(d)}
+    ${htmlPush()}
     <h2>Próximos vencimientos</h2>
     <div class="card">${venc}</div>`;
 }
@@ -191,6 +194,46 @@ async function irCargar(i) {
 async function quitarRec(i) {
   const x = cache.inicio.recordatorios[i];
   try { await api("quitarRecordatorio", { clave: x.clave }); await cargar("inicio"); } catch (e) { alert(e.message); }
+}
+
+// ---- Avisos push en este celular ----
+function pushActivo() { try { return localStorage.getItem("pushOk") === "1" && Notification.permission === "granted"; } catch (e) { return false; } }
+
+function htmlPush() {
+  if (pushActivo()) return `<div class="card" id="pushCard"><div class="row"><span>Avisos en este celular</span><span class="ok">Activados</span></div>
+    <button class="mini" onclick="probarPush()">Enviar prueba</button><div class="nota" id="pushNota"></div></div>`;
+  return `<div class="card" id="pushCard"><div class="row"><span>Avisos en este celular</span><span>Desactivados</span></div>
+    <button class="btn" onclick="activarAvisos()">Activar avisos</button><div class="nota" id="pushNota"></div></div>`;
+}
+
+async function activarAvisos() {
+  const nota = $("pushNota"); nota.className = "nota"; nota.textContent = "Activando…";
+  try {
+    if (!("Notification" in window) || typeof firebase === "undefined") throw new Error("Este navegador no soporta avisos.");
+    if (await Notification.requestPermission() !== "granted") throw new Error("Permiso denegado. Activalo en los ajustes del sitio en Chrome.");
+    if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+    const reg = await navigator.serviceWorker.ready;
+    const token = await firebase.messaging().getToken({ vapidKey: window.VAPID_KEY, serviceWorkerRegistration: reg });
+    if (!token) throw new Error("No pude obtener el token del celular.");
+    await api("registrarToken", { token, link: location.origin + location.pathname });
+    try { localStorage.setItem("pushOk", "1"); } catch (e) {}
+    $("pushCard").outerHTML = htmlPush();
+  } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
+}
+
+async function probarPush() {
+  const nota = $("pushNota"); nota.className = "nota"; nota.textContent = "Enviando…";
+  try { const r = await api("probarPush"); nota.className = "nota ok"; nota.textContent = r.enviados + " aviso(s) enviado(s)."; }
+  catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
+}
+
+// Con la app abierta, mostrar igual el aviso.
+if (pushActivo() && typeof firebase !== "undefined") {
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+    firebase.messaging().onMessage((p) => navigator.serviceWorker.ready.then((r) =>
+      r.showNotification((p.notification && p.notification.title) || "Finanzas", { body: (p.notification && p.notification.body) || "", icon: "icon-192.png" })));
+  } catch (e) {}
 }
 
 let mesSel = 0;

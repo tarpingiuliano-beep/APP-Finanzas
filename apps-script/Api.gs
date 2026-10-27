@@ -27,6 +27,8 @@ function doPost(e) {
     if (body.accion === "leerFoto") return respuesta({ ok: true, data: apiLeerFoto(body.datos || {}) });
     if (body.accion === "cargarFactura") return respuesta({ ok: true, data: apiCargarFactura(body.datos || {}) });
     if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
+    if (body.accion === "registrarToken") return respuesta({ ok: true, data: registrarToken(body.datos || {}) });
+    if (body.accion === "probarPush") return respuesta({ ok: true, data: probarPush() });
     return respuesta({ ok: false, error: "Acción desconocida" });
   } catch (err) {
     return respuesta({ ok: false, error: "Error: " + err.message });
@@ -351,4 +353,86 @@ function quitarRecordatorio(d) {
   delete cad[String(d.clave || "")];
   PropertiesService.getScriptProperties().setProperty("CADENCIA_CARGA", JSON.stringify(cad));
   return { quitado: true };
+}
+
+// ==== Avisos push (Firebase Cloud Messaging) ====
+// Propiedades del script: FCM_SERVICE_ACCOUNT (JSON de la cuenta de servicio, cargado a mano),
+// FCM_TOKENS (celulares registrados, lo escribe la app), APP_LINK (dirección de la app),
+// CANAL_TELEGRAM ("on" para que además llegue por Telegram; por defecto solo push).
+function tokensPush() { return JSON.parse(PropertiesService.getScriptProperties().getProperty("FCM_TOKENS") || "[]"); }
+
+function registrarToken(d) {
+  const t = String(d.token || "");
+  if (t.length < 50 || t.length > 400) throw new Error("Token inválido");
+  const props = PropertiesService.getScriptProperties();
+  const lista = tokensPush().filter(x => x !== t);
+  lista.unshift(t);
+  props.setProperty("FCM_TOKENS", JSON.stringify(lista.slice(0, 5)));
+  if (/^https:\/\//.test(String(d.link || ""))) props.setProperty("APP_LINK", String(d.link).slice(0, 200));
+  return { registrado: true, configurado: !!props.getProperty("FCM_SERVICE_ACCOUNT") };
+}
+
+function tokenAccesoFcm(cuenta) {
+  const cache = CacheService.getScriptCache();
+  const guardado = cache.get("FCM_ACCESS");
+  if (guardado) return guardado;
+  const b64 = (x) => Utilities.base64EncodeWebSafe(x).replace(/=+$/, "");
+  const ahora = Math.floor(Date.now() / 1000);
+  const cab = b64(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const cuerpo = b64(JSON.stringify({
+    iss: cuenta.client_email, scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token", iat: ahora, exp: ahora + 3600
+  }));
+  const firma = b64(Utilities.computeRsaSha256Signature(cab + "." + cuerpo, cuenta.private_key));
+  const r = UrlFetchApp.fetch("https://oauth2.googleapis.com/token", {
+    method: "post", muteHttpExceptions: true,
+    payload: { grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: cab + "." + cuerpo + "." + firma }
+  });
+  if (r.getResponseCode() !== 200) throw new Error("Push: no pude autenticar la cuenta de servicio (" + r.getResponseCode() + ")");
+  const token = JSON.parse(r.getContentText()).access_token;
+  cache.put("FCM_ACCESS", token, 3000);
+  return token;
+}
+
+// Devuelve cuántos celulares recibieron el aviso (0 si push no está configurado o no hay celulares).
+function enviarPush(titulo, cuerpo) {
+  const props = PropertiesService.getScriptProperties();
+  const crudo = props.getProperty("FCM_SERVICE_ACCOUNT");
+  const tokens = tokensPush();
+  if (!crudo || !tokens.length) return 0;
+  const cuenta = JSON.parse(crudo);
+  const acceso = tokenAccesoFcm(cuenta);
+  const link = props.getProperty("APP_LINK");
+  const url = "https://fcm.googleapis.com/v1/projects/" + cuenta.project_id + "/messages:send";
+  let enviados = 0;
+  const vivos = [];
+  tokens.forEach(t => {
+    const mensaje = { token: t, notification: { title: titulo, body: cuerpo } };
+    if (link) mensaje.webpush = { fcm_options: { link: link } };
+    const r = UrlFetchApp.fetch(url, {
+      method: "post", contentType: "application/json", muteHttpExceptions: true,
+      headers: { Authorization: "Bearer " + acceso }, payload: JSON.stringify({ message: mensaje })
+    });
+    const c = r.getResponseCode();
+    if (c === 200) { enviados++; vivos.push(t); }
+    else if (c === 404 || /UNREGISTERED/.test(r.getContentText())) { /* celular dado de baja: se descarta */ }
+    else { vivos.push(t); console.error("FCM " + c + ": " + r.getContentText().slice(0, 300)); }
+  });
+  if (vivos.length !== tokens.length) props.setProperty("FCM_TOKENS", JSON.stringify(vivos));
+  return enviados;
+}
+
+// Canal único de avisos: push siempre que esté configurado; Telegram solo si CANAL_TELEGRAM = "on"
+// o si el push no pudo entregarse (así nunca se pierde un aviso).
+function avisar(titulo, cuerpo) {
+  let enviados = 0;
+  try { enviados = enviarPush(titulo, cuerpo); } catch (e) { console.error(e.message); }
+  const telegram = PropertiesService.getScriptProperties().getProperty("CANAL_TELEGRAM") === "on";
+  if (telegram || enviados === 0) enviarTelegram(titulo + "\n" + cuerpo);
+}
+
+function probarPush() {
+  const n = enviarPush("Finanzas", "Los avisos funcionan ✔");
+  if (n === 0) throw new Error("Todavía no hay avisos configurados: falta cargar la cuenta de servicio en el script.");
+  return { enviados: n };
 }
