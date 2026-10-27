@@ -81,6 +81,25 @@
   .mini { border: 0; border-radius: 10px; padding: 8px 12px; font-size: 13px; background: var(--sand); color: var(--text); font-family: inherit; }
   .mini.ir { background: var(--blue); }
   .ok { color: var(--ok); } .mal { color: var(--bad); }
+  .nav-mes { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .nav-mes b { font-weight: 600; text-transform: capitalize; }
+  .dia { display: grid; grid-template-columns: 54px 1fr auto; gap: 8px; align-items: center; padding: 9px 0;
+    border-bottom: 1px solid var(--line); font-size: 14px; cursor: pointer; }
+  .dia:last-child { border-bottom: 0; }
+  .dia small { color: var(--muted); font-size: 12px; display: block; }
+  .dia.finde { color: var(--muted); } .dia.edit small:first-child { color: var(--text); }
+  .dia.libre { opacity: .6; }
+  .edit-dia { background: var(--bg); border-radius: 12px; padding: 12px; margin: 4px 0 10px; }
+  .edit-dia .acc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #impresion { display: none; }
+  @media print {
+    body > *:not(#impresion) { display: none !important; }
+    #impresion { display: block !important; color: #000; background: #fff; font-size: 11px; }
+    #impresion table { width: 100%; border-collapse: collapse; }
+    #impresion td, #impresion th { border: 1px solid #999; padding: 3px 6px; text-align: left; }
+    #impresion h1 { font-size: 16px; margin: 0 0 8px; }
+    @page { size: A4; margin: 14mm; }
+  }
 </style>
 </head>
 <body>
@@ -104,8 +123,11 @@
   <button data-v="inicio" class="on">Inicio</button>
   <button data-v="deuda">Deuda</button>
   <button data-v="objetivo">Objetivo</button>
+  <button data-v="horas">Horas</button>
   <button data-v="cargar">Cargar</button>
 </nav>
+
+<div id="impresion"></div>
 
 <script src="config.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
@@ -149,8 +171,9 @@ async function entrar(c) {
 async function cargar(v) {
   vistaActual = v;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", cargar: "Cargar" }[v];
+  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", cargar: "Cargar" }[v];
   if (v === "cargar") { $("vista").innerHTML = htmlCargar(); return; }
+  if (v === "horas") { await cargarHoras(horasMes); return; }
   const d = await api(v === "objetivo" ? "deuda" : v);
   cache[v] = d;
   if (v === "deuda") mesSel = 0;
@@ -431,6 +454,116 @@ async function guardarItem(i) {
     const el = $("it" + i); el.classList.add("hecho");
     el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : n >= 2 ? " × " + n : ""}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
+}
+
+
+// ---- Facturación (horas) ----
+let horasMes = "", horasData = null, diaAbierto = "";
+const hh = (n) => (Math.round(n * 100) / 100).toLocaleString("es-AR");
+const dmy = (f) => f.slice(8) + "/" + f.slice(5, 7);
+
+async function cargarHoras(mes) {
+  const d = await api("facturacion", mes ? { mes } : {});
+  mostrarHoras(d);
+}
+function mostrarHoras(d) {
+  horasData = d; horasMes = d.mes; diaAbierto = "";
+  $("vista").innerHTML = htmlHoras(d);
+}
+function mesVecino(mes, n) {
+  const x = new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)) - 1 + n, 1);
+  return x.getFullYear() + "-" + ("0" + (x.getMonth() + 1)).slice(-2);
+}
+function irMes(n) { cargarHoras(mesVecino(horasMes, n)).catch(e => alert(e.message)); }
+
+function htmlHoras(d) {
+  const v = d.valores || {};
+  const fila = (t, c, x) => `<div class="row"><span>${t}${x && x.desde ? ` <small>(desde ${dmy(x.desde)})</small>` : ""}</span><span>${money(x ? x.valor : 0)} <button class="mini" onclick="editarValor('${c}')">Cambiar</button></span></div>`;
+  return `
+  <div class="nav-mes"><button class="mini" onclick="irMes(-1)">‹</button><b>${d.label}</b><button class="mini" onclick="irMes(1)">›</button></div>
+  <div class="big pos"><small>Total a facturar · se cobra en ${d.cobra}</small><b>${money(d.total)}</b></div>
+  <div class="card">
+    <div class="row"><span>Horas</span><span>${hh(d.horas)} hs</span></div>
+    <div class="row"><span>Horas × valor hora</span><span>${money(d.montoHoras)}</span></div>
+    <div class="row"><span>Monotributo</span><span>${money(d.monotributo)}</span></div>
+    <div class="row"><span>Obra social / prepaga</span><span>${money(d.obraSocial)}</span></div>
+  </div>
+  <h2>Valores vigentes</h2>
+  <div class="card">
+    ${fila("Valor hora", "valorHora", v.valorHora)}
+    ${fila("Monotributo", "monotributo", v.monotributo)}
+    ${fila("Obra social", "obraSocial", v.obraSocial)}
+    <div class="nota" id="notaVal"></div>
+  </div>
+  <h2>Días</h2>
+  <div class="card">${d.dias.map(htmlDia).join("")}</div>
+  <button class="btn btn2" onclick="imprimirHoras()">Imprimir resumen (A4)</button>`;
+}
+
+function htmlDia(x) {
+  const libre = !x.entrada && !x.ho;
+  const detalle = libre ? "Sin horas" : (x.entrada ? `${x.entrada} – ${x.salida}` : "") + (x.ho ? `${x.entrada ? " · " : ""}HO ${hh(x.ho)} hs` : "");
+  const marca = (x.feriado ? " · feriado" : "") + (x.editado ? " · modificado" : "");
+  return `<div id="d${x.fecha}"><div class="dia ${x.finde ? "finde" : ""} ${libre ? "libre" : ""}" onclick="abrirDia('${x.fecha}')">
+    <span><b>${x.dia}</b> ${x.num}</span><span>${detalle}<small>${marca.replace(/^ · /, "")}</small></span><span>${libre ? "" : hh(x.total) + " hs"}</span></div></div>`;
+}
+
+function abrirDia(f) {
+  if (diaAbierto) { const prev = diaAbierto; diaAbierto = ""; const px = horasData.dias.find(z => z.fecha === prev); if (px) $("d" + prev).innerHTML = htmlDia(px).replace(/^<div id="d[^"]*">|<\/div>$/g, ""); }
+  if (diaAbierto === f) return;
+  const x = horasData.dias.find(z => z.fecha === f); diaAbierto = f;
+  $("d" + f).innerHTML = `<div class="edit-dia">
+    <b>${x.dia} ${dmy(f)}</b>
+    <div class="fila" style="display:flex;gap:8px;margin-top:8px">
+      <div class="campo" style="flex:1"><label>Entrada</label><input id="eE" type="time" value="${x.entrada}"></div>
+      <div class="campo" style="flex:1"><label>Salida</label><input id="eS" type="time" value="${x.salida}"></div>
+      <div class="campo" style="flex:1"><label>Home office</label><input id="eH" type="number" min="0" max="24" step="0.5" inputmode="decimal" value="${x.ho}"></div>
+    </div>
+    <div class="nota" id="eN"></div>
+    <div class="acc">
+      <button class="mini ir" onclick="guardarDia('${f}')">Guardar</button>
+      <button class="mini" onclick="diaLibre('${f}')">Día libre</button>
+      ${x.editado ? `<button class="mini" onclick="restablecerDia('${f}')">Restablecer</button>` : ""}
+      <button class="mini" onclick="mostrarHoras(horasData)">Cancelar</button>
+    </div></div>`;
+}
+
+async function enviarDia(f, datos, texto) {
+  if (!confirm(texto)) return;
+  try { mostrarHoras(await api("guardarJornada", Object.assign({ fecha: f }, datos))); }
+  catch (e) { const n = $("eN"); if (n) { n.className = "nota mal"; n.textContent = e.message; } else alert(e.message); }
+}
+function guardarDia(f) {
+  const e = $("eE").value, s = $("eS").value, h = Number($("eH").value) || 0;
+  enviarDia(f, { entrada: e, salida: s, ho: h }, `¿Guardar ${dmy(f)}: ${e && s ? e + " a " + s : "sin oficina"}${h ? ", home office " + h + " hs" : ""}?`);
+}
+function diaLibre(f) { enviarDia(f, { entrada: "", salida: "", ho: 0 }, `¿Marcar ${dmy(f)} como día sin horas?`); }
+function restablecerDia(f) { enviarDia(f, { restablecer: true }, `¿Volver ${dmy(f)} al horario habitual?`); }
+
+const NOMBRE_VAL = { valorHora: "valor hora", monotributo: "monotributo", obraSocial: "obra social" };
+async function editarValor(c) {
+  const actual = horasData.valores[c];
+  const t = prompt(`Nuevo ${NOMBRE_VAL[c]} (actual ${actual ? money(actual.valor) : "sin cargar"}):`, actual ? actual.valor : "");
+  if (t === null) return;
+  const valor = leerMonto(t);
+  if (!(valor > 0)) { alert("Valor inválido"); return; }
+  const hoy = new Date(), iso = hoy.getFullYear() + "-" + ("0" + (hoy.getMonth() + 1)).slice(-2) + "-" + ("0" + hoy.getDate()).slice(-2);
+  const desde = prompt("¿Desde qué fecha rige? (AAAA-MM-DD)", iso);
+  if (!desde || !/^\d{4}-\d{2}-\d{2}$/.test(desde)) { alert("Fecha inválida"); return; }
+  if (!confirm(`¿Guardar ${NOMBRE_VAL[c]} ${money(valor)} desde ${dmy(desde)}?`)) return;
+  try { mostrarHoras(await api("guardarValores", { concepto: c, desde, valor, mes: horasMes })); }
+  catch (e) { alert(e.message); }
+}
+
+function imprimirHoras() {
+  const d = horasData;
+  const filas = d.dias.filter(x => x.entrada || x.ho).map(x =>
+    `<tr><td>${x.dia} ${x.num}/${x.fecha.slice(5, 7)}</td><td>${x.entrada || "-"}</td><td>${x.salida || "-"}</td><td>${hh(x.pres)}</td><td>${hh(x.ho)}</td><td>${hh(x.total)}</td><td>${money(x.valorHora)}</td><td>${money(x.monto)}</td></tr>`).join("");
+  $("impresion").innerHTML = `<h1>Resumen de horas · ${d.label}</h1>
+    <table><tr><th>Día</th><th>Entrada</th><th>Salida</th><th>Hs oficina</th><th>Hs home office</th><th>Total hs</th><th>Valor hora</th><th>Monto</th></tr>${filas}
+    <tr><th colspan="5">Total horas</th><th>${hh(d.horas)}</th><th>Subtotal</th><th>${money(d.montoHoras)}</th></tr></table>
+    <p>Cuota monotributo: ${money(d.monotributo)}<br>Medicina prepaga: ${money(d.obraSocial)}<br><b>TOTAL FACTURA: ${money(d.total)}</b></p>`;
+  window.print();
 }
 
 $("formLogin").addEventListener("submit", (e) => { e.preventDefault(); entrar($("clave").value); });

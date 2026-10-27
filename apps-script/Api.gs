@@ -29,6 +29,9 @@ function doPost(e) {
     if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
     if (body.accion === "registrarToken") return respuesta({ ok: true, data: registrarToken(body.datos || {}) });
     if (body.accion === "probarPush") return respuesta({ ok: true, data: probarPush() });
+    if (body.accion === "facturacion") return respuesta({ ok: true, data: apiFacturacion(body.datos || {}) });
+    if (body.accion === "guardarJornada") return respuesta({ ok: true, data: guardarJornada(body.datos || {}) });
+    if (body.accion === "guardarValores") return respuesta({ ok: true, data: guardarValores(body.datos || {}) });
     return respuesta({ ok: false, error: "Acción desconocida" });
   } catch (err) {
     return respuesta({ ok: false, error: "Error: " + err.message });
@@ -51,6 +54,9 @@ function leerFlujo() {
   const v = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Flujo").getRange("A1:B15").getValues();
   const get = (re) => { for (let i = 1; i < v.length; i++) if (re.test(String(v[i][0]))) return Number(v[i][1]) || 0; return 0; };
   const f = { mesRaw: v[0][1], ingreso: get(/^ingreso/i), fijos: get(/fijos/i), cuotas: get(/^total cuotas/i), pagoUnico: get(/pago [uú]nico/i) };
+  const fact = ingresoFacturado();                 // lo facturado el mes anterior se cobra este mes
+  if (fact > 0) f.ingreso = fact;
+  f.fijos = calcularFijos().total;
   f.resultado = f.ingreso - f.fijos - f.cuotas - f.pagoUnico;
   return f;
 }
@@ -103,12 +109,8 @@ function apiDeuda() {
   const ingreso = flujo.ingreso;
   const pagoUnico = flujo.pagoUnico;
 
-  let fijos = 0, psicoHoy = 0;
-  ss.getSheetByName("Fijos").getRange("A2:B").getValues().forEach(r => {
-    if (typeof r[1] !== "number") return;
-    fijos += r[1];
-    if (/psicoan/i.test(String(r[0]))) psicoHoy = r[1];
-  });
+  const cf = calcularFijos();
+  const fijos = cf.total, psicoHoy = cf.psico;
 
   const cuotas = [];
   for (let i = 1; i < datos.length; i++) {
@@ -448,4 +450,213 @@ function probarPush() {
   const n = enviarPush("Finanzas", "Los avisos funcionan ✔");
   if (n === 0) throw new Error("Todavía no hay avisos configurados: falta cargar la cuenta de servicio en el script.");
   return { enviados: n };
+}
+
+// ==== Facturación: horas, valores vigentes y total a facturar ====
+// Hojas (se crean solas): "Jornadas" guarda SOLO los días que difieren de lo habitual y "Parametros"
+// guarda el historial de valor hora, monotributo y obra social (cada valor rige desde una fecha).
+// Por defecto: lunes a viernes de 08:00 a 17:00, feriados incluidos (se cobran), home office 0.
+// Lo facturado un mes se cobra el mes siguiente y pasa a ser el ingreso de ese mes.
+const HORA_ENTRADA = "08:00";
+const HORA_SALIDA = "17:00";
+const DIAS_ES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+function hhmm(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), "HH:mm");
+  const m = String(v || "").match(/^(\d{1,2}):(\d{2})/);
+  return m ? ("0" + m[1]).slice(-2) + ":" + m[2] : "";
+}
+function minutos(t) { const m = String(t).match(/^(\d{2}):(\d{2})$/); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; }
+
+function hojaJornadas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName("Jornadas");
+  if (h) return h;
+  h = ss.insertSheet("Jornadas");
+  h.getRange(1, 1, 1, 4).setValues([["Fecha", "Entrada", "Salida", "Home office (hs)"]]).setFontWeight("bold");
+  h.getRange("A:C").setNumberFormat("@");
+  // Septiembre 2026: datos reales de la planilla anterior (solo los días que difieren de lo habitual).
+  const sep = [
+    ["2026-09-02", "08:00", "15:30", 0], ["2026-09-03", "08:00", "16:00", 0], ["2026-09-09", "08:00", "16:00", 0],
+    ["2026-09-10", "08:00", "16:00", 0], ["2026-09-11", "08:00", "16:00", 0], ["2026-09-15", "08:00", "16:30", 1],
+    ["2026-09-18", "08:00", "16:00", 0], ["2026-09-20", "", "", 3], ["2026-09-21", "08:00", "17:00", 1],
+    ["2026-09-23", "08:00", "16:30", 1], ["2026-09-24", "08:00", "18:00", 0], ["2026-09-28", "08:00", "16:00", 8],
+    ["2026-09-29", "08:00", "17:00", 1]
+  ];
+  h.getRange(2, 1, sep.length, 4).setValues(sep);
+  return h;
+}
+
+function hojaParametros() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName("Parametros");
+  if (h) return h;
+  h = ss.insertSheet("Parametros");
+  h.getRange(1, 1, 1, 3).setValues([["Concepto", "Desde", "Valor"]]).setFontWeight("bold");
+  h.getRange("A:B").setNumberFormat("@");
+  const ini = [
+    ["valorHora", "2026-01-01", 10422], ["valorHora", "2026-09-28", 11018],
+    ["monotributo", "2026-01-01", 66020.12], ["obraSocial", "2026-01-01", 96480]
+  ];
+  h.getRange(2, 1, ini.length, 3).setValues(ini);
+  return h;
+}
+
+function leerJornadas() {
+  const h = hojaJornadas();
+  const out = {};
+  if (h.getLastRow() < 2) return out;
+  h.getRange(2, 1, h.getLastRow() - 1, 4).getValues().forEach(r => {
+    const f = aFecha(r[0]);
+    if (f) out[fechaTxt(f)] = { entrada: hhmm(r[1]), salida: hhmm(r[2]), ho: Number(r[3]) || 0 };
+  });
+  return out;
+}
+
+function leerParametros() {
+  const h = hojaParametros();
+  const out = { valorHora: [], monotributo: [], obraSocial: [] };
+  if (h.getLastRow() < 2) return out;
+  h.getRange(2, 1, h.getLastRow() - 1, 3).getValues().forEach(r => {
+    const f = aFecha(r[1]), c = String(r[0]).trim();
+    if (f && out[c] && Number(r[2]) > 0) out[c].push({ desde: fechaTxt(f), valor: Number(r[2]) });
+  });
+  Object.keys(out).forEach(k => out[k].sort((a, b) => a.desde < b.desde ? -1 : 1));
+  return out;
+}
+
+// Valor que rige en una fecha "yyyy-MM-dd": el último cuya fecha "desde" no supera esa fecha.
+function vigente(lista, fecha) {
+  let v = 0;
+  lista.forEach(x => { if (x.desde <= fecha) v = x.valor; });
+  return v;
+}
+function vigenteDesde(lista, fecha) {
+  let r = null;
+  lista.forEach(x => { if (x.desde <= fecha) r = x; });
+  return r;
+}
+
+function calcularMes(anio, mes0) {
+  const jor = leerJornadas(), par = leerParametros(), feriados = cargarFeriados();
+  const dias = [];
+  let horas = 0, monto = 0;
+  for (let d = new Date(anio, mes0, 1); d.getMonth() === mes0; d.setDate(d.getDate() + 1)) {
+    const f = fechaTxt(d), dow = d.getDay(), o = jor[f];
+    let entrada = "", salida = "", ho = 0;
+    if (o) { entrada = o.entrada; salida = o.salida; ho = o.ho; }
+    else if (dow >= 1 && dow <= 5) { entrada = HORA_ENTRADA; salida = HORA_SALIDA; }
+    const pres = (entrada && salida) ? Math.max(0, minutos(salida) - minutos(entrada)) / 60 : 0;
+    const total = pres + ho;
+    const vh = vigente(par.valorHora, f);
+    horas += total; monto += total * vh;
+    dias.push({
+      fecha: f, dia: DIAS_ES[dow], num: d.getDate(), finde: dow === 0 || dow === 6, feriado: !!feriados[claveDia(d)],
+      entrada: entrada, salida: salida, ho: ho, pres: pres, total: total, valorHora: vh,
+      monto: Math.round(total * vh), editado: !!o
+    });
+  }
+  const ultimo = fechaTxt(new Date(anio, mes0 + 1, 0));
+  const mono = vigente(par.monotributo, ultimo), obra = vigente(par.obraSocial, ultimo);
+  monto = Math.round(monto);
+  return {
+    dias: dias, horas: horas, montoHoras: monto, monotributo: mono, obraSocial: obra, total: monto + mono + obra,
+    valores: {
+      valorHora: vigenteDesde(par.valorHora, ultimo), monotributo: vigenteDesde(par.monotributo, ultimo), obraSocial: vigenteDesde(par.obraSocial, ultimo)
+    }
+  };
+}
+
+function mesActualTxt() { return fechaTxt(new Date()).slice(0, 7); }
+
+function apiFacturacion(d) {
+  const mes = /^\d{4}-\d{2}$/.test(String(d.mes || "")) ? String(d.mes) : mesActualTxt();
+  const anio = Number(mes.slice(0, 4)), mes0 = Number(mes.slice(5, 7)) - 1;
+  const c = calcularMes(anio, mes0);
+  const sig = new Date(anio, mes0 + 1, 1);
+  return {
+    mes: mes, label: MESES_LARGO[mes0] + " " + anio, cobra: MESES_LARGO[sig.getMonth()] + " " + sig.getFullYear(),
+    dias: c.dias, horas: c.horas, montoHoras: c.montoHoras, monotributo: c.monotributo, obraSocial: c.obraSocial,
+    total: c.total, valores: c.valores
+  };
+}
+
+// Lo facturado el mes anterior es el ingreso del mes en curso (0 si no hay valor hora cargado).
+function ingresoFacturado() {
+  const h = new Date();
+  return calcularMes(h.getFullYear(), h.getMonth() - 1).total || 0;
+}
+
+// Fijos del mes: lo de la hoja Fijos, con Monotributo y Obra social/Prepaga tomados de los valores vigentes.
+function calcularFijos() {
+  const filas = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos").getRange("A2:B").getValues();
+  const par = leerParametros(), hoy = fechaTxt(new Date());
+  const mono = vigente(par.monotributo, hoy), obra = vigente(par.obraSocial, hoy);
+  let total = 0, psico = 0, tieneObra = false;
+  filas.forEach(r => {
+    if (typeof r[1] !== "number") return;
+    const n = String(r[0]);
+    let v = r[1];
+    if (/monotributo/i.test(n) && mono) v = mono;
+    if (/prepaga|obra social|medicina/i.test(n)) { tieneObra = true; if (obra) v = obra; }
+    total += v;
+    if (/psicoan/i.test(n)) psico = v;
+  });
+  if (!tieneObra && obra) total += obra;
+  return { total: total, psico: psico };
+}
+
+function guardarJornada(d) {
+  const f = String(d.fecha || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) throw new Error("Fecha inválida");
+  const h = hojaJornadas();
+  const col = h.getLastRow() > 1 ? h.getRange(2, 1, h.getLastRow() - 1, 1).getValues() : [];
+  let fila = -1;
+  for (let i = 0; i < col.length; i++) { const x = aFecha(col[i][0]); if (x && fechaTxt(x) === f) { fila = i + 2; break; } }
+
+  if (d.restablecer) {
+    if (fila > 0) h.deleteRow(fila);
+  } else {
+    const entrada = hhmm(d.entrada), salida = hhmm(d.salida), ho = Number(d.ho) || 0;
+    if ((entrada && !salida) || (!entrada && salida)) throw new Error("Completá entrada y salida, o dejá las dos vacías");
+    if (entrada && minutos(salida) <= minutos(entrada)) throw new Error("La salida debe ser posterior a la entrada");
+    if (ho < 0 || ho > 24) throw new Error("Las horas de home office deben estar entre 0 y 24");
+    if (fila < 0) fila = Math.max(2, h.getLastRow() + 1);
+    h.getRange(fila, 1, 1, 4).setValues([[f, entrada, salida, ho]]);
+  }
+  return apiFacturacion({ mes: f.slice(0, 7) });
+}
+
+function guardarValores(d) {
+  const concepto = String(d.concepto || "");
+  if (["valorHora", "monotributo", "obraSocial"].indexOf(concepto) < 0) throw new Error("Concepto inválido");
+  const desde = String(d.desde || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) throw new Error("Falta la fecha desde la que rige");
+  const valor = Number(d.valor);
+  if (!(valor > 0)) throw new Error("El valor debe ser mayor a 0");
+  const h = hojaParametros();
+  const datos = h.getLastRow() > 1 ? h.getRange(2, 1, h.getLastRow() - 1, 2).getValues() : [];
+  let fila = -1;
+  for (let i = 0; i < datos.length; i++) {
+    const x = aFecha(datos[i][1]);
+    if (String(datos[i][0]).trim() === concepto && x && fechaTxt(x) === desde) { fila = i + 2; break; }
+  }
+  if (fila < 0) fila = Math.max(2, h.getLastRow() + 1);
+  h.getRange(fila, 1, 1, 3).setValues([[concepto, desde, valor]]);
+  return apiFacturacion({ mes: d.mes });
+}
+
+// Penúltimo día hábil del mes (sin fines de semana ni feriados): recordatorio para actualizar los valores.
+function recordatorioFacturacion(hoy) {
+  const ult = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+  let n = 0, penultimo = null;
+  for (let d = new Date(ult); d.getMonth() === hoy.getMonth(); d.setDate(d.getDate() - 1)) {
+    if (esHabil(d) && ++n === 2) { penultimo = new Date(d); break; }
+  }
+  if (!penultimo || penultimo.getTime() !== hoy.getTime()) return null;
+  const par = leerParametros(), f = fechaTxt(hoy);
+  const money = (n) => "$" + Math.round(n).toLocaleString("es-AR");
+  const linea = (t, lista) => { const v = vigenteDesde(lista, f); return t + ": " + (v ? money(v.valor) + " (desde " + v.desde.slice(8) + "/" + v.desde.slice(5, 7) + ")" : "sin cargar"); };
+  return linea("Valor hora", par.valorHora) + "\n" + linea("Monotributo", par.monotributo) + "\n" + linea("Obra social", par.obraSocial) +
+    "\n\nSi cambió alguno, actualizalo en Horas antes de facturar.";
 }
