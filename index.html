@@ -103,6 +103,7 @@
 <nav id="nav" class="hidden">
   <button data-v="inicio" class="on">Inicio</button>
   <button data-v="deuda">Deuda</button>
+  <button data-v="objetivo">Objetivo</button>
   <button data-v="cargar">Cargar</button>
 </nav>
 
@@ -148,12 +149,12 @@ async function entrar(c) {
 async function cargar(v) {
   vistaActual = v;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", cargar: "Cargar" }[v];
+  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", cargar: "Cargar" }[v];
   if (v === "cargar") { $("vista").innerHTML = htmlCargar(); return; }
-  const d = await api(v);
+  const d = await api(v === "objetivo" ? "deuda" : v);
   cache[v] = d;
   if (v === "deuda") mesSel = 0;
-  $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : htmlDeuda(d);
+  $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : v === "objetivo" ? htmlObjetivo(d) : htmlDeuda(d);
 }
 
 function htmlInicio(d) {
@@ -240,6 +241,38 @@ function escucharEnPrimerPlano() {
   } catch (e) {}
 }
 if (pushActivo()) escucharEnPrimerPlano();
+
+// ---- Objetivo: ahorro proyectado a 12 meses contra la meta (20% del ingreso) ----
+function htmlObjetivo(d) {
+  const meses = d.meses;
+  const meta = meses.reduce((s, m) => s + m.meta, 0);
+  let acum = 0, metaAcum = 0, cumplen = 0;
+  const filas = meses.map(m => {
+    acum += m.resultado; metaAcum += m.meta; if (m.vsMeta >= 0) cumplen++;
+    return { label: m.label, ahorro: m.resultado, acum, metaAcum, ok: m.vsMeta >= 0 };
+  });
+  const pctTotal = meta ? acum / meta : 0;
+  const ancho = Math.max(0, Math.min(100, pctTotal * 100));
+  const dif = acum - meta;
+  const color = pctTotal >= 1 ? "var(--green)" : pctTotal >= 0.6 ? "var(--sand)" : "var(--rose)";
+  const lista = filas.map(f => `<div class="mes" style="grid-template-columns:52px 1fr 92px;cursor:default"><span>${f.label}</span>
+    <div class="bar"><i style="width:${Math.max(2, Math.min(100, f.metaAcum ? f.acum / f.metaAcum * 100 : 0))}%;background:${f.acum >= f.metaAcum ? "var(--green)" : "#b9d3e6"}"></i></div>
+    <span title="ahorro del mes">${money(f.ahorro)}</span></div>`).join("");
+  return `
+    <div class="big" style="background:${color}"><small>Ahorro proyectado a 12 meses</small><b>${money(acum)}</b></div>
+    <div class="card">
+      <div class="row"><span>Objetivo (${pct(0.2)} del ingreso por mes)</span><span>${money(meta)}</span></div>
+      <div class="bar" style="height:12px;background:var(--sand);border-radius:8px;overflow:hidden;margin:6px 0 10px"><i style="display:block;height:100%;width:${ancho}%;background:${pctTotal >= 1 ? "var(--ok)" : "#8fb6d3"};border-radius:8px"></i></div>
+      <div class="row"><span>Avance</span><span><b>${pct(pctTotal)}</b></span></div>
+      <div class="row"><span>${dif >= 0 ? "Por encima del objetivo" : "Falta para el objetivo"}</span>
+        <span style="color:${dif >= 0 ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(dif))}</span></div>
+      <div class="row"><span>Meses que cumplen la meta</span><span>${cumplen} de ${meses.length}</span></div>
+    </div>
+    <h2>Acumulado mes a mes</h2>
+    <div class="card">${lista}
+      <div class="vacio" style="text-align:left;padding-bottom:0">La barra es el acumulado contra la meta acumulada (verde = al día). A la derecha, lo que queda cada mes.</div></div>
+    <div class="vacio" style="text-align:left">Es una proyección con lo ya comprometido (fijos, cuotas y consumos del mes). No incluye gastos nuevos que todavía no cargaste.</div>`;
+}
 
 let mesSel = 0;
 const pct = (x) => (x * 100).toFixed(1).replace(".", ",") + "%";

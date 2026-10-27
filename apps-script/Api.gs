@@ -88,6 +88,13 @@ function apiInicio() {
 }
 
 const META_AHORRO = 0.2; // objetivo: ahorrar el 20% del ingreso
+const PRECIO_SESION = 60000; // psicoanalista: valor por sesión (una por viernes) desde noviembre 2026
+
+function viernesDelMes(anio, mes) {
+  let n = 0;
+  for (let d = new Date(anio, mes, 1); d.getMonth() === mes; d.setDate(d.getDate() + 1)) if (d.getDay() === 5) n++;
+  return n;
+}
 
 function apiDeuda() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -96,8 +103,12 @@ function apiDeuda() {
   const ingreso = flujo.ingreso;
   const pagoUnico = flujo.pagoUnico;
 
-  let fijos = 0;
-  ss.getSheetByName("Fijos").getRange("B2:B").getValues().forEach(r => { if (typeof r[0] === "number") fijos += r[0]; });
+  let fijos = 0, psicoHoy = 0;
+  ss.getSheetByName("Fijos").getRange("A2:B").getValues().forEach(r => {
+    if (typeof r[1] !== "number") return;
+    fijos += r[1];
+    if (/psicoan/i.test(String(r[0]))) psicoHoy = r[1];
+  });
 
   const cuotas = [];
   for (let i = 1; i < datos.length; i++) {
@@ -122,7 +133,9 @@ function apiDeuda() {
       const nombre = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
       grupos[nombre] = (grupos[nombre] || 0) + c.monto;
     });
-    const lineas = [{ nombre: "Fijos", monto: fijos }];
+    // Psicoanalista: desde el mes siguiente se paga una sesión por viernes al PRECIO_SESION vigente.
+    const fijosMes = (k >= 1 && psicoHoy) ? fijos - psicoHoy + PRECIO_SESION * viernesDelMes(d.getFullYear(), d.getMonth()) : fijos;
+    const lineas = [{ nombre: "Fijos", monto: fijosMes }];
     if (prestamo) lineas.push({ nombre: "Préstamo", monto: prestamo });
     if (descuento) lineas.push({ nombre: "Descuento alquiler (termotanque)", monto: -descuento });
     Object.keys(grupos).forEach(n => lineas.push({ nombre: n + " – cuotas", monto: grupos[n] }));
