@@ -217,6 +217,7 @@ async function activarAvisos() {
     if (!token) throw new Error("No pude obtener el token del celular.");
     await api("registrarToken", { token, link: location.origin + location.pathname });
     try { localStorage.setItem("pushOk", "1"); } catch (e) {}
+    escucharEnPrimerPlano();
     $("pushCard").outerHTML = htmlPush();
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
 }
@@ -227,14 +228,18 @@ async function probarPush() {
   catch (e) { nota.className = "nota mal"; nota.textContent = e.message; }
 }
 
-// Con la app abierta, mostrar igual el aviso.
-if (pushActivo() && typeof firebase !== "undefined") {
+// Con la app abierta Firebase no muestra nada solo: hay que mostrar el aviso a mano.
+let escuchando = false;
+function escucharEnPrimerPlano() {
+  if (escuchando || typeof firebase === "undefined") return;
   try {
     if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
     firebase.messaging().onMessage((p) => navigator.serviceWorker.ready.then((r) =>
       r.showNotification((p.notification && p.notification.title) || "Finanzas", { body: (p.notification && p.notification.body) || "", icon: "icon-192.png" })));
+    escuchando = true;
   } catch (e) {}
 }
+if (pushActivo()) escucharEnPrimerPlano();
 
 let mesSel = 0;
 const pct = (x) => (x * 100).toFixed(1).replace(".", ",") + "%";

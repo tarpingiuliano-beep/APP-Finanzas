@@ -6,7 +6,7 @@ importScripts("https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-com
 firebase.initializeApp(self.FIREBASE_CONFIG);
 firebase.messaging();
 
-const CACHE = "finanzas-v8";
+const CACHE = "finanzas-v9";
 const SHELL = ["./", "index.html", "config.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
