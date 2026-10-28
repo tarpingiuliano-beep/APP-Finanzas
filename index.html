@@ -194,6 +194,7 @@ async function cargar(v) {
 }
 
 function htmlInicio(d) {
+  const ahorro = d.ingreso * 0.2, disp = d.resultado - ahorro;
   const venc = d.vencimientos.length ? d.vencimientos.map((v, i) => {
     const cuando = v.dias === 0 ? "hoy" : v.dias === 1 ? "mañana" : "en " + v.dias + " días";
     return `<div id="vf${i}"><div class="venc"><div>${esc(v.concepto)}<small>${v.fecha}</small></div>
@@ -201,18 +202,19 @@ function htmlInicio(d) {
       <button class="mini" style="margin-left:6px" onclick="editarFac(${i})">Editar</button></div></div></div>`;
   }).join("") : `<div class="vacio">Sin vencimientos cargados</div>`;
   return `
-    <div class="big ${d.resultado >= 0 ? "pos" : "neg"}"><small>Resultado de ${d.mes}</small><b>${money(d.resultado)}</b></div>
+    <div class="big ${disp >= 0 ? "pos" : "neg"}"><small>Disponible de ${d.mes} (después de ahorrar)</small><b>${money(disp)}</b></div>
     <div class="card">
       <div class="row"><span>Ingreso neto</span><span>${money(d.ingreso)}</span></div>
       <div class="row"><span>Fijos</span><span>${money(d.fijos)}</span></div>
       <div class="row"><span>Cuotas</span><span>${money(d.cuotas)}</span></div>
       <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
+      <div class="row"><span>Ahorro (${pct(0.2)})</span><span>${money(ahorro)}</span></div>
     </div>
     <div class="nota">Es lo que pagás este mes. Lo que cargues ahora entra desde el mes que viene (o el siguiente, si marcás "siguiente resumen").</div>
     ${recordatorios(d)}
-    ${htmlPush()}
     <h2>Próximos vencimientos</h2>
-    <div class="card">${venc}</div>`;
+    <div class="card">${venc}</div>
+    ${htmlPush()}`;
 }
 
 function editarFac(i) {
@@ -335,13 +337,21 @@ function htmlObjetivo(d) {
     <div class="vacio" style="text-align:left">Proyección con lo ya comprometido (fijos, cuotas y consumos cargados). No incluye gastos que todavía no cargaste. Cada mes se congela al terminar.</div>`;
 }
 
+// Porcentaje de ahorro que sí se puede sostener: lo que queda del ingreso, redondeado hacia abajo, hasta el 20%.
+function ahorroRecomendado(m) {
+  if (m.resultado <= 0 || !m.ingreso) return { txt: "0%", nota: "Este mes los compromisos superan el ingreso: no queda margen para ahorrar." };
+  if (m.vsMeta >= 0) return { txt: `${pct(0.2)} · ${money(m.meta)}`, nota: `Llegás a la meta y te sobran ${money(m.vsMeta)}.` };
+  const p = Math.max(0, Math.floor(m.resultado / m.ingreso * 100));
+  return { txt: `${p}% · ${money(m.ingreso * p / 100)}`, nota: `Con este mes no llegás al ${pct(0.2)}; lo máximo que podés ahorrar es ${pct(m.resultado / m.ingreso)} (${money(m.resultado)}). Recomiendo ${p}% para no quedar justo.` };
+}
+
 function htmlObjMes() {
   const m = objTodos[objIdx];
   const chips = objTodos.map((x, i) => `<button class="chip ${i === objIdx ? "on" : ""} ${x.estado}" onclick="selObj(${i})">${x.label}</button>`).join("");
   const estado = m.estado === "cerrado" ? "Cerrado" : m.estado === "actual" ? "En curso" : "Proyectado";
   const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${money(sc.total)}</span></div>` +
     sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}</span></div>`).join("")).join("");
-  const ok = m.vsMeta >= 0;
+  const rec = ahorroRecomendado(m);
   return `<div class="chips" id="chips">${chips}</div>
     <div class="card" id="objCard" ontouchstart="tocarObj(event)" ontouchend="tocarObj(event)">
       <div class="nav-mes" style="margin-bottom:6px"><button class="mini" onclick="selObj(${objIdx - 1})" ${objIdx <= 0 ? "disabled" : ""}>‹</button>
@@ -352,7 +362,8 @@ function htmlObjMes() {
       <div class="sec"><span>Total a pagar</span><span>${money(m.total)}</span></div>
       <div class="sec"><span>Te queda</span><span style="color:${m.resultado >= 0 ? "var(--ok)" : "var(--bad)"}">${money(m.resultado)}</span></div>
       <div class="row"><span>Meta de ahorro (${pct(0.2)} del ingreso)</span><span>${money(m.meta)}</span></div>
-      <div class="row"><span>${ok ? "Superás la meta por" : "Te faltan para la meta"}</span><span style="color:${ok ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(m.vsMeta))}</span></div>
+      <div class="row"><span><b>Ahorro recomendado</b></span><span><b>${rec.txt}</b></span></div>
+      <div class="nota" style="margin:2px 0 0">${rec.nota}</div>
     </div>`;
 }
 
@@ -372,7 +383,7 @@ function tocarObj(e) {
 let mesSel = 0;
 
 function htmlDeuda(d) {
-  const bruto = (m) => m.secciones.filter(sc => sc.tipo === "cuotas" && sc.titulo !== "Descuento de alquiler").reduce((a, sc) => a + sc.total, 0);
+  const bruto = (m) => m.secciones.filter(sc => (sc.tipo === "cuotas" && sc.titulo !== "Descuento de alquiler") || sc.tipo === "unico").reduce((a, sc) => a + sc.total, 0);
   const max = Math.max(1, ...d.meses.map(bruto));
   const filas = d.meses.map(m => `<div class="mes" style="grid-template-columns:52px 1fr 92px;cursor:default"><span>${m.label}</span>
     <div class="hbar"><i style="width:${Math.max(2, bruto(m) / max * 100)}%"></i></div><span>${money(bruto(m))}</span></div>`).join("");
@@ -382,8 +393,8 @@ function htmlDeuda(d) {
     grupos[t].map(c => `<div class="sub"><span>${esc(c.concepto)} <small>· quedan ${c.restantes}${c.empieza ? ", empieza en " + c.empieza : ""}, termina en ${c.termina}</small></span><span>${money(c.monto)}</span></div>`).join("")).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
     <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>
-    <h2>Lo que pagás de cuotas cada mes</h2>
-    <div class="card">${filas}<div class="vacio" style="text-align:left;padding-bottom:0">Cuotas y préstamo, sin descuentos. Baja a medida que terminan.</div></div>
+    <h2>Compromisos mensuales</h2>
+    <div class="card">${filas}<div class="vacio" style="text-align:left;padding-bottom:0">Cuotas, préstamo y consumos de un pago. No incluye fijos ni el descuento de alquiler.</div></div>
     <h2>Tus cuotas</h2>
     <div class="card">${lista}</div>`;
 }
