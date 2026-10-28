@@ -25,6 +25,9 @@ function doPost(e) {
     if (body.accion === "deuda") return respuesta({ ok: true, data: apiDeuda() });
     if (body.accion === "cargar") return respuesta({ ok: true, data: apiCargar(body.datos || {}) });
     if (body.accion === "leerFoto") return respuesta({ ok: true, data: apiLeerFoto(body.datos || {}) });
+    if (body.accion === "objetivo") return respuesta({ ok: true, data: apiObjetivo() });
+    if (body.accion === "editarFactura") return respuesta({ ok: true, data: apiEditarFactura(body.datos || {}) });
+    if (body.accion === "borrarFactura") return respuesta({ ok: true, data: apiBorrarFactura(body.datos || {}) });
     if (body.accion === "cargarFactura") return respuesta({ ok: true, data: apiCargarFactura(body.datos || {}) });
     if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
     if (body.accion === "registrarToken") return respuesta({ ok: true, data: registrarToken(body.datos || {}) });
@@ -61,12 +64,156 @@ function leerFlujo() {
   return f;
 }
 
+// ==== Proyección por mes (base de Inicio, Deuda y Objetivo) ====
+// Cada mes muestra lo que se PAGA ese mes. Un consumo o una cuota nueva se paga por primera vez
+// el mes siguiente a cargarla (o dos meses después si se tilda "siguiente resumen"), así que cargar
+// cosas hoy no mueve el resultado del mes en curso.
+const META_AHORRO = 0.2; // objetivo: ahorrar el 20% del ingreso
+const PRECIO_SESION = 60000; // psicoanalista: valor por sesión (una por viernes)
+const PRIMER_MES_SESIONES = "2026-11";
+let MEMO = {};
+function memo(k, fn) { if (!(k in MEMO)) MEMO[k] = fn(); return MEMO[k]; }
+
+function mesKey(d) { return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2); }
+function sumarMeses(key, n) { return mesKey(new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1 + n, 1)); }
+function difMeses(a, b) { return (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7)); }
+
+function viernesDelMes(anio, mes) {
+  let n = 0;
+  for (let d = new Date(anio, mes, 1); d.getMonth() === mes; d.setDate(d.getDate() + 1)) if (d.getDay() === 5) n++;
+  return n;
+}
+
+function textoMes(v) {
+  if (v instanceof Date) return mesKey(v);
+  return /^\d{4}-\d{2}$/.test(String(v || "").trim()) ? String(v).trim() : "";
+}
+
+function leerCuotas() {
+  return memo("cuotas", () => {
+    const datos = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
+    const out = [];
+    for (let i = 1; i < datos.length; i++) {
+      const nombre = String(datos[i][0]).trim();
+      if (nombre.toLowerCase() === "total") break;
+      const monto = Number(datos[i][1]) || 0, restantes = Number(datos[i][2]) || 0;
+      if (!nombre || monto <= 0 || restantes <= 0) continue;
+      out.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim(), primer: textoMes(datos[i][5]) });
+    }
+    return out;
+  });
+}
+
+function leerConsumos() {
+  return memo("consumos", () => {
+    const h = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Consumos");
+    if (!h || h.getLastRow() < 2) return [];
+    const out = [];
+    h.getRange(2, 1, h.getLastRow() - 1, 5).getValues().forEach(r => {
+      if (!(r[0] instanceof Date) || !(Number(r[2]) > 0)) return;
+      out.push({ concepto: String(r[1]), monto: Number(r[2]), tarjeta: String(r[3] || ""), pago: textoMes(r[4]) || sumarMeses(mesKey(r[0]), 1) });
+    });
+    return out;
+  });
+}
+
+function ingresoManual() {
+  const v = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Flujo").getRange("A1:B15").getValues();
+  for (let i = 1; i < v.length; i++) if (/^ingreso/i.test(String(v[i][0]))) return Number(v[i][1]) || 0;
+  return 0;
+}
+
+function proyectar(n) {
+  const hoyKey = mesKey(new Date());
+  const cuotas = leerCuotas(), consumos = leerConsumos(), cf = calcularFijos(), manual = ingresoManual();
+  const meses = [];
+  for (let k = 0; k < n; k++) {
+    const key = sumarMeses(hoyKey, k), anio = Number(key.slice(0, 4)), m0 = Number(key.slice(5, 7)) - 1;
+    const prev = new Date(anio, m0 - 1, 1);
+    const fact = calcularMes(prev.getFullYear(), prev.getMonth()).total;   // lo facturado el mes anterior se cobra este mes
+    const ingreso = fact > 0 ? fact : manual;
+
+    const secciones = [];
+    secciones.push({ titulo: "Fijos", tipo: "fijos", items: cf.items.map(f => {
+      if (f.psico && key >= PRIMER_MES_SESIONES) { const v = viernesDelMes(anio, m0); return { nombre: "Psicoanalista (" + v + " viernes)", monto: PRECIO_SESION * v }; }
+      return { nombre: f.nombre, monto: f.monto };
+    }) });
+
+    const porTarjeta = {}, prestamo = [], descuento = [];
+    cuotas.forEach(c => {
+      const off = c.primer ? Math.max(0, difMeses(hoyKey, c.primer)) : 0;
+      if (k < off || k >= off + c.restantes) return;
+      const item = { nombre: c.concepto, monto: c.monto, nota: "quedan " + (c.restantes - (k - off)) };
+      if (/pr[eé]stamo/i.test(c.concepto)) { prestamo.push(item); return; }
+      if (/termotanque/i.test(c.concepto)) descuento.push({ nombre: "Termotanque", monto: -c.monto });
+      const t = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
+      (porTarjeta[t] = porTarjeta[t] || []).push(item);
+    });
+    if (prestamo.length) secciones.push({ titulo: "Préstamo", tipo: "cuotas", items: prestamo });
+    Object.keys(porTarjeta).sort().forEach(t => secciones.push({ titulo: "Cuotas " + t, tipo: "cuotas", items: porTarjeta[t] }));
+    if (descuento.length) secciones.push({ titulo: "Descuento de alquiler", tipo: "cuotas", items: descuento });
+    const un = consumos.filter(c => c.pago === key).map(c => ({ nombre: c.concepto, monto: c.monto, nota: c.tarjeta }));
+    if (un.length) secciones.push({ titulo: "Consumos de un pago", tipo: "unico", items: un });
+
+    secciones.forEach(sc => { sc.total = sc.items.reduce((a, x) => a + x.monto, 0); });
+    const suma = (tipo) => secciones.filter(sc => sc.tipo === tipo).reduce((a, sc) => a + sc.total, 0);
+    const total = secciones.reduce((a, sc) => a + sc.total, 0);
+    const meta = ingreso * META_AHORRO, resultado = ingreso - total;
+    meses.push({
+      key: key, label: MESES_ES[m0] + " " + String(anio).slice(2), labelLargo: MESES_LARGO[m0] + " " + anio, estado: k === 0 ? "actual" : "futuro",
+      ingreso: ingreso, fijos: suma("fijos"), cuotas: suma("cuotas"), unico: suma("unico"), secciones: secciones,
+      total: total, resultado: resultado, pct: ingreso ? resultado / ingreso : 0, meta: meta, vsMeta: resultado - meta
+    });
+  }
+  return meses;
+}
+
+// "Cierres": foto de cada mes. Mientras el mes está en curso se actualiza; al cambiar de mes queda congelada.
+function guardarFoto(m) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName("Cierres");
+  if (!h) {
+    h = ss.insertSheet("Cierres");
+    h.getRange(1, 1, 1, 7).setValues([["Mes", "Ingreso", "Total compromisos", "Resultado", "Meta ahorro", "Detalle", "Actualizado"]]).setFontWeight("bold");
+    h.getRange("A:A").setNumberFormat("@");
+  }
+  const detalle = JSON.stringify({ ingreso: m.ingreso, fijos: m.fijos, cuotas: m.cuotas, unico: m.unico, secciones: m.secciones, total: m.total, resultado: m.resultado, meta: m.meta });
+  const col = h.getLastRow() > 1 ? h.getRange(2, 1, h.getLastRow() - 1, 6).getValues() : [];
+  for (let i = 0; i < col.length; i++) {
+    if (textoMes(col[i][0]) === m.key) {
+      if (String(col[i][5]) !== detalle) h.getRange(i + 2, 2, 1, 6).setValues([[m.ingreso, m.total, m.resultado, m.meta, detalle, fechaTxt(new Date())]]);
+      return;
+    }
+  }
+  const fila = Math.max(2, h.getLastRow() + 1);
+  h.getRange(fila, 1, 1, 7).setValues([[m.key, m.ingreso, m.total, m.resultado, m.meta, detalle, fechaTxt(new Date())]]);
+}
+
+function leerCierres(hastaKey) {
+  const h = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Cierres");
+  if (!h || h.getLastRow() < 2) return [];
+  const out = [];
+  h.getRange(2, 1, h.getLastRow() - 1, 6).getValues().forEach(r => {
+    const key = textoMes(r[0]);
+    if (!key || key >= hastaKey) return;
+    try {
+      const d = JSON.parse(String(r[5]));
+      const m0 = Number(key.slice(5, 7)) - 1, anio = Number(key.slice(0, 4));
+      d.key = key; d.label = MESES_ES[m0] + " " + String(anio).slice(2); d.labelLargo = MESES_LARGO[m0] + " " + anio; d.estado = "cerrado";
+      d.pct = d.ingreso ? d.resultado / d.ingreso : 0; d.vsMeta = d.resultado - d.meta;
+      out.push(d);
+    } catch (e) {}
+  });
+  out.sort((a, b) => a.key < b.key ? -1 : 1);
+  return out;
+}
+
 function apiInicio() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const tz = Session.getScriptTimeZone();
-  const f = leerFlujo();
-  const mesRaw = f.mesRaw;
-  const mes = (mesRaw instanceof Date) ? MESES_LARGO[mesRaw.getMonth()] + " " + mesRaw.getFullYear() : String(mesRaw);
+  const meses = proyectar(1);
+  guardarFoto(meses[0]);
+  const m = meses[0];
 
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const datos = ss.getSheetByName(SHEET_FACTURAS).getDataRange().getValues();
@@ -77,7 +224,7 @@ function apiInicio() {
     const vto = aFecha(fila[3]);
     if (!vto || vto < hoy) continue;
     vencimientos.push({
-      concepto: fila[0], monto: Number(fila[2]) || 0,
+      fila: i + 1, concepto: fila[0], monto: Number(fila[2]) || 0, iso: fechaTxt(vto),
       fecha: Utilities.formatDate(vto, tz, "dd/MM/yyyy"),
       dias: Math.round((vto - hoy) / 86400000), _t: vto.getTime()
     });
@@ -86,73 +233,31 @@ function apiInicio() {
   vencimientos.forEach(v => delete v._t);
 
   return {
-    mes: mes, ingreso: f.ingreso, fijos: f.fijos, cuotas: f.cuotas,
-    pagoUnico: f.pagoUnico, resultado: f.resultado,
+    mes: m.labelLargo, ingreso: m.ingreso, fijos: m.fijos, cuotas: m.cuotas,
+    pagoUnico: m.unico, resultado: m.resultado,
     vencimientos: vencimientos.slice(0, 10),
     recordatorios: recordatoriosCarga(hoy)
   };
 }
 
-const META_AHORRO = 0.2; // objetivo: ahorrar el 20% del ingreso
-const PRECIO_SESION = 60000; // psicoanalista: valor por sesión (una por viernes) desde noviembre 2026
-
-function viernesDelMes(anio, mes) {
-  let n = 0;
-  for (let d = new Date(anio, mes, 1); d.getMonth() === mes; d.setDate(d.getDate() + 1)) if (d.getDay() === 5) n++;
-  return n;
+function apiDeuda() {
+  const meses = proyectar(12);
+  guardarFoto(meses[0]);
+  const hoyKey = mesKey(new Date());
+  const cuotas = leerCuotas().map(c => {
+    const off = c.primer ? Math.max(0, difMeses(hoyKey, c.primer)) : 0;
+    const fin = sumarMeses(hoyKey, off + c.restantes - 1);
+    return { concepto: c.concepto, monto: c.monto, restantes: c.restantes, tarjeta: c.tarjeta,
+      empieza: off > 0 ? MESES_ES[Number(c.primer.slice(5, 7)) - 1] + " " + c.primer.slice(2, 4) : "",
+      termina: MESES_ES[Number(fin.slice(5, 7)) - 1] + " " + fin.slice(2, 4) };
+  });
+  return { total: cuotas.reduce((a, c) => a + c.monto * c.restantes, 0), meses: meses, cuotas: cuotas };
 }
 
-function apiDeuda() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const datos = ss.getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
-  const flujo = leerFlujo();
-  const ingreso = flujo.ingreso;
-  const pagoUnico = flujo.pagoUnico;
-
-  const cf = calcularFijos();
-  const fijos = cf.total, psicoHoy = cf.psico;
-
-  const cuotas = [];
-  for (let i = 1; i < datos.length; i++) {
-    const nombre = String(datos[i][0]).trim();
-    if (nombre.toLowerCase() === "total") break;
-    const monto = Number(datos[i][1]) || 0;
-    const restantes = Number(datos[i][2]) || 0;
-    if (!nombre || monto <= 0 || restantes <= 0) continue;
-    cuotas.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim() });
-  }
-
-  const hoy = new Date();
-  const meses = [];
-  for (let k = 0; k < 12; k++) {
-    const d = new Date(hoy.getFullYear(), hoy.getMonth() + k, 1);
-    const grupos = {};
-    let prestamo = 0, descuento = 0;
-    cuotas.forEach(c => {
-      if (c.restantes <= k) return;
-      if (/pr[eé]stamo/i.test(c.concepto)) { prestamo += c.monto; return; }
-      if (/termotanque/i.test(c.concepto)) descuento += c.monto; // el descuento de alquiler compensa la cuota
-      const nombre = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
-      grupos[nombre] = (grupos[nombre] || 0) + c.monto;
-    });
-    // Psicoanalista: desde el mes siguiente se paga una sesión por viernes al PRECIO_SESION vigente.
-    const fijosMes = (k >= 1 && psicoHoy) ? fijos - psicoHoy + PRECIO_SESION * viernesDelMes(d.getFullYear(), d.getMonth()) : fijos;
-    const lineas = [{ nombre: "Fijos", monto: fijosMes }];
-    if (prestamo) lineas.push({ nombre: "Préstamo", monto: prestamo });
-    if (descuento) lineas.push({ nombre: "Descuento alquiler (termotanque)", monto: -descuento });
-    Object.keys(grupos).forEach(n => lineas.push({ nombre: n + " – cuotas", monto: grupos[n] }));
-    if (k === 0 && pagoUnico) lineas.push({ nombre: "Otros consumos (un pago)", monto: pagoUnico });
-    const total = lineas.reduce((s, l) => s + l.monto, 0);
-    const resultado = ingreso - total;
-    const meta = ingreso * META_AHORRO;
-    meses.push({
-      label: MESES_ES[d.getMonth()] + " " + String(d.getFullYear()).slice(2),
-      lineas: lineas, total: total, ingreso: ingreso, resultado: resultado,
-      pct: ingreso ? resultado / ingreso : 0, meta: meta, vsMeta: resultado - meta
-    });
-  }
-  const deudaTotal = cuotas.reduce((s, c) => s + c.monto * c.restantes, 0);
-  return { total: deudaTotal, meses: meses, cuotas: cuotas };
+function apiObjetivo() {
+  const meses = proyectar(12);
+  guardarFoto(meses[0]);
+  return { pasados: leerCierres(meses[0].key), meses: meses };
 }
 
 // ==== Carga desde la app: consumos en cuotas y consumos de un solo pago ====
@@ -183,8 +288,11 @@ function apiCargar(d) {
     hoja.getRange(fila, 1, 1, 3).setValues([[concepto, monto, n]]);
     hoja.getRange(fila, 4).setFormula('=IF(C' + fila + '=0,"PAGADA","")');
     hoja.getRange(fila, 5).setValue(tarjeta);
+    const primer = sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);   // primer mes en que se paga
+    hoja.getRange(fila, 6).setNumberFormat("@").setValue(primer);
+    if (!hoja.getRange(1, 6).getValue()) hoja.getRange(1, 6).setValue("Primer pago");
     hoja.getRange(fila + 1, 2).setFormula("=SUM(B2:B" + fila + ")");
-    return { guardado: "cuotas" };
+    return { guardado: "cuotas", primerPago: primer };
   }
 
   if (d.tipo === "unico") {
@@ -196,8 +304,11 @@ function apiCargar(d) {
       hoja.getRange("C2:C").setNumberFormat("$#,##0");
     }
     hoja.appendRow([new Date(), concepto, monto, tarjeta]);
-    enlazarPagoUnico();
-    return { guardado: "unico" };
+    const pago = sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);
+    const r = hoja.getLastRow();
+    hoja.getRange(r, 5).setNumberFormat("@").setValue(pago);
+    if (!hoja.getRange(1, 5).getValue()) hoja.getRange(1, 5).setValue("Mes de pago");
+    return { guardado: "unico", primerPago: pago };
   }
   throw new Error("Tipo desconocido");
 }
@@ -252,6 +363,44 @@ function apiCargarFactura(d) {
   hoja.appendRow([concepto, categoriaFactura(concepto), monto, fechaTxt(vto), fechaTxt(rescate), "Pendiente", fechaTxt(pago), "Pendiente"]);
   actualizarCadencia(concepto, vto);
   return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago) };
+}
+
+function validarFactura(d) {
+  const concepto = String(d.concepto || "").trim().slice(0, 80);
+  const monto = Number(d.monto);
+  const m = String(d.vencimiento || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!concepto) throw new Error("Falta el concepto");
+  if (!(monto > 0)) throw new Error("El monto debe ser mayor a 0");
+  if (!m) throw new Error("Falta la fecha de vencimiento");
+  return { concepto: concepto, monto: monto, vto: new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) };
+}
+
+function filaFactura(d) {
+  const hoja = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FACTURAS);
+  const fila = Math.floor(Number(d.fila));
+  if (!(fila >= 2 && fila <= hoja.getLastRow())) throw new Error("No encuentro esa factura");
+  const actual = hoja.getRange(fila, 1, 1, 8).getValues()[0];
+  if (String(actual[0]).trim() !== String(d.original || "").trim()) throw new Error("La lista cambió. Actualizá la pantalla y probá de nuevo.");
+  return { hoja: hoja, fila: fila, actual: actual };
+}
+
+function apiEditarFactura(d) {
+  const f = filaFactura(d), v = validarFactura(d);
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const rescate = restarDiasHabiles(v.vto, 2);
+  const pago = new Date(v.vto); pago.setDate(pago.getDate() - 1);
+  const vtoAnt = aFecha(f.actual[3]);
+  const cambio = !vtoAnt || vtoAnt.getTime() !== v.vto.getTime();
+  const eR = cambio ? (rescate >= hoy ? "Pendiente" : "Avisado") : f.actual[5];
+  const eP = cambio ? (pago >= hoy ? "Pendiente" : "Avisado") : f.actual[7];
+  f.hoja.getRange(f.fila, 1, 1, 8).setValues([[v.concepto, categoriaFactura(v.concepto), v.monto, fechaTxt(v.vto), fechaTxt(rescate), eR, fechaTxt(pago), eP]]);
+  return { editado: true };
+}
+
+function apiBorrarFactura(d) {
+  const f = filaFactura(d);
+  f.hoja.deleteRow(f.fila);
+  return { borrado: true };
 }
 
 // ==== Lectura de comprobantes con Gemini: devuelve propuestas, la app las aprueba antes de guardar ====
@@ -502,7 +651,8 @@ function hojaParametros() {
   return h;
 }
 
-function leerJornadas() {
+function leerJornadas() { return memo('jor', _leerJornadas); }
+function _leerJornadas() {
   const h = hojaJornadas();
   const out = {};
   if (h.getLastRow() < 2) return out;
@@ -513,7 +663,8 @@ function leerJornadas() {
   return out;
 }
 
-function leerParametros() {
+function leerParametros() { return memo('par', _leerParametros); }
+function _leerParametros() {
   const h = hojaParametros();
   const out = { valorHora: [], monotributo: [], obraSocial: [] };
   if (h.getLastRow() < 2) return out;
@@ -538,7 +689,7 @@ function vigenteDesde(lista, fecha) {
 }
 
 function calcularMes(anio, mes0) {
-  const jor = leerJornadas(), par = leerParametros(), feriados = cargarFeriados();
+  const jor = leerJornadas(), par = leerParametros(), feriados = memo('fer', cargarFeriados);
   const dias = [];
   let horas = 0, monto = 0;
   for (let d = new Date(anio, mes0, 1); d.getMonth() === mes0; d.setDate(d.getDate() + 1)) {
@@ -583,27 +734,30 @@ function apiFacturacion(d) {
 
 // Lo facturado el mes anterior es el ingreso del mes en curso (0 si no hay valor hora cargado).
 function ingresoFacturado() {
-  const h = new Date();
-  return calcularMes(h.getFullYear(), h.getMonth() - 1).total || 0;
+  const h = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+  return calcularMes(h.getFullYear(), h.getMonth()).total || 0;
 }
 
 // Fijos del mes: lo de la hoja Fijos, con Monotributo y Obra social/Prepaga tomados de los valores vigentes.
 function calcularFijos() {
-  const filas = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos").getRange("A2:B").getValues();
-  const par = leerParametros(), hoy = fechaTxt(new Date());
-  const mono = vigente(par.monotributo, hoy), obra = vigente(par.obraSocial, hoy);
-  let total = 0, psico = 0, tieneObra = false;
-  filas.forEach(r => {
-    if (typeof r[1] !== "number") return;
-    const n = String(r[0]);
-    let v = r[1];
-    if (/monotributo/i.test(n) && mono) v = mono;
-    if (/prepaga|obra social|medicina/i.test(n)) { tieneObra = true; if (obra) v = obra; }
-    total += v;
-    if (/psicoan/i.test(n)) psico = v;
+  return memo("fijos", () => {
+    const filas = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos").getRange("A2:B").getValues();
+    const par = leerParametros(), hoy = fechaTxt(new Date());
+    const mono = vigente(par.monotributo, hoy), obra = vigente(par.obraSocial, hoy);
+    const items = [];
+    let tieneObra = false;
+    filas.forEach(r => {
+      if (typeof r[1] !== "number") return;
+      const n = String(r[0]);
+      let v = r[1];
+      if (/monotributo/i.test(n) && mono) v = mono;
+      if (/prepaga|obra social|medicina/i.test(n)) { tieneObra = true; if (obra) v = obra; }
+      items.push({ nombre: n, monto: v, psico: /psicoan/i.test(n) });
+    });
+    if (!tieneObra && obra) items.push({ nombre: "Obra social / prepaga", monto: obra, psico: false });
+    const total = items.reduce((a, x) => a + x.monto, 0);
+    return { total: total, items: items, psico: (items.filter(x => x.psico)[0] || { monto: 0 }).monto };
   });
-  if (!tieneObra && obra) total += obra;
-  return { total: total, psico: psico };
 }
 
 function guardarJornada(d) {
@@ -624,6 +778,7 @@ function guardarJornada(d) {
     if (fila < 0) fila = Math.max(2, h.getLastRow() + 1);
     h.getRange(fila, 1, 1, 4).setValues([[f, entrada, salida, ho]]);
   }
+  MEMO = {};
   return apiFacturacion({ mes: f.slice(0, 7) });
 }
 
@@ -643,6 +798,7 @@ function guardarValores(d) {
   }
   if (fila < 0) fila = Math.max(2, h.getLastRow() + 1);
   h.getRange(fila, 1, 1, 3).setValues([[concepto, desde, valor]]);
+  MEMO = {};
   return apiFacturacion({ mes: d.mes });
 }
 

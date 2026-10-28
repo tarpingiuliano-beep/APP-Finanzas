@@ -91,6 +91,19 @@
   .dia.libre { opacity: .6; }
   .edit-dia { background: var(--bg); border-radius: 12px; padding: 12px; margin: 4px 0 10px; }
   .edit-dia .acc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 12px; scrollbar-width: none; }
+  .chip { flex: 0 0 auto; padding: 8px 12px; border-radius: 999px; background: var(--sand); font-size: 13px; border: 0; color: var(--text); font-family: inherit; }
+  .chip.on { background: var(--blue); font-weight: 600; }
+  .chip.cerrado { opacity: .75; }
+  .sec { display: flex; justify-content: space-between; font-weight: 600; font-size: 14px; padding: 12px 0 2px; border-top: 1px solid var(--line); margin-top: 6px; }
+  .sub { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); padding: 2px 0 2px 12px; }
+  .sub span:first-child { min-width: 0; }
+  .tag { font-size: 11px; background: var(--sand); border-radius: 999px; padding: 2px 8px; margin-left: 6px; color: var(--muted); }
+  .tilde { display: flex; gap: 10px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; font-size: 15px; }
+  .tilde input { width: 22px; height: 22px; margin-top: 1px; flex: none; }
+  .tilde small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .hbar { height: 10px; background: var(--sand); border-radius: 6px; overflow: hidden; }
+  .hbar i { display: block; height: 100%; background: #8fb6d3; border-radius: 6px; }
   #impresion { display: none; }
   @media print {
     body > *:not(#impresion) { display: none !important; }
@@ -134,7 +147,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const money = (n) => "$" + Number(n || 0).toLocaleString("es-AR", { maximumFractionDigits: 0 });
+const money = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(Number(n || 0)).toLocaleString("es-AR", { maximumFractionDigits: 0 });
 let clave = null, vistaActual = "inicio";
 const cache = {};
 
@@ -174,17 +187,18 @@ async function cargar(v) {
   $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", cargar: "Cargar" }[v];
   if (v === "cargar") { $("vista").innerHTML = htmlCargar(); return; }
   if (v === "horas") { await cargarHoras(horasMes); return; }
-  const d = await api(v === "objetivo" ? "deuda" : v);
+  const d = await api(v);
   cache[v] = d;
-  if (v === "deuda") mesSel = 0;
+  if (v === "objetivo") objIdx = null;
   $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : v === "objetivo" ? htmlObjetivo(d) : htmlDeuda(d);
 }
 
 function htmlInicio(d) {
-  const venc = d.vencimientos.length ? d.vencimientos.map(v => {
+  const venc = d.vencimientos.length ? d.vencimientos.map((v, i) => {
     const cuando = v.dias === 0 ? "hoy" : v.dias === 1 ? "mañana" : "en " + v.dias + " días";
-    return `<div class="venc"><div>${v.concepto}<small>${v.fecha}</small></div>
-      <div style="text-align:right">${money(v.monto)}<br><span class="pill ${v.dias === 0 ? "hoy" : ""}">${cuando}</span></div></div>`;
+    return `<div id="vf${i}"><div class="venc"><div>${esc(v.concepto)}<small>${v.fecha}</small></div>
+      <div style="text-align:right">${money2(v.monto)}<br><span class="pill ${v.dias === 0 ? "hoy" : ""}">${cuando}</span>
+      <button class="mini" style="margin-left:6px" onclick="editarFac(${i})">Editar</button></div></div></div>`;
   }).join("") : `<div class="vacio">Sin vencimientos cargados</div>`;
   return `
     <div class="big ${d.resultado >= 0 ? "pos" : "neg"}"><small>Resultado de ${d.mes}</small><b>${money(d.resultado)}</b></div>
@@ -194,10 +208,37 @@ function htmlInicio(d) {
       <div class="row"><span>Cuotas</span><span>${money(d.cuotas)}</span></div>
       <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
     </div>
+    <div class="nota">Es lo que pagás este mes. Lo que cargues ahora entra desde el mes que viene (o el siguiente, si marcás "siguiente resumen").</div>
     ${recordatorios(d)}
     ${htmlPush()}
     <h2>Próximos vencimientos</h2>
     <div class="card">${venc}</div>`;
+}
+
+function editarFac(i) {
+  const v = cache.inicio.vencimientos[i];
+  $("vf" + i).innerHTML = `<div class="edit-dia">
+    <div class="campo"><label>Concepto</label><input id="fC" type="text" value="${esc(v.concepto)}"></div>
+    <div class="fila" style="display:flex;gap:8px">
+      <div class="campo" style="flex:1"><label>Monto</label><input id="fM" type="text" inputmode="decimal" value="${v.monto}" oninput="$('fEco').textContent = money2(leerMonto(this.value))"></div>
+      <div class="campo" style="flex:1"><label>Vencimiento</label><input id="fV" type="date" value="${v.iso}"></div>
+    </div>
+    <div class="nota" id="fEco">${money2(v.monto)}</div>
+    <div class="acc"><button class="mini ir" onclick="guardarFac(${i})">Guardar</button>
+      <button class="mini" onclick="borrarFac(${i})">Borrar</button>
+      <button class="mini" onclick="cargar('inicio')">Cancelar</button></div></div>`;
+}
+async function guardarFac(i) {
+  const v = cache.inicio.vencimientos[i];
+  const datos = { fila: v.fila, original: v.concepto, concepto: $("fC").value.trim(), monto: leerMonto($("fM").value), vencimiento: $("fV").value };
+  if (!datos.concepto || !(datos.monto > 0) || !datos.vencimiento) { $("fEco").className = "nota mal"; $("fEco").textContent = "Completá todos los campos."; return; }
+  if (!confirm(`¿Guardar ${datos.concepto} por ${money2(datos.monto)}, vence el ${fechaCorta(datos.vencimiento)}?`)) return;
+  try { await api("editarFactura", datos); await cargar("inicio"); } catch (e) { $("fEco").className = "nota mal"; $("fEco").textContent = e.message; }
+}
+async function borrarFac(i) {
+  const v = cache.inicio.vencimientos[i];
+  if (!confirm(`¿Borrar la factura ${v.concepto} (${money2(v.monto)})?`)) return;
+  try { await api("borrarFactura", { fila: v.fila, original: v.concepto }); await cargar("inicio"); } catch (e) { alert(e.message); }
 }
 
 function recordatorios(d) {
@@ -266,69 +307,84 @@ function escucharEnPrimerPlano() {
 if (pushActivo()) escucharEnPrimerPlano();
 
 // ---- Objetivo: ahorro proyectado a 12 meses contra la meta (20% del ingreso) ----
+let objIdx = null, objTodos = [];
+const pct = (x) => (x * 100).toFixed(1).replace(".", ",") + "%";
+
 function htmlObjetivo(d) {
   const meses = d.meses;
-  const meta = meses.reduce((s, m) => s + m.meta, 0);
-  let acum = 0, metaAcum = 0, cumplen = 0;
-  const filas = meses.map(m => {
-    acum += m.resultado; metaAcum += m.meta; if (m.vsMeta >= 0) cumplen++;
-    return { label: m.label, ahorro: m.resultado, acum, metaAcum, ok: m.vsMeta >= 0 };
-  });
-  const pctTotal = meta ? acum / meta : 0;
-  const ancho = Math.max(0, Math.min(100, pctTotal * 100));
-  const dif = acum - meta;
+  objTodos = (d.pasados || []).concat(meses);
+  if (objIdx === null) objIdx = (d.pasados || []).length;
+  const meta = meses.reduce((s, m) => s + m.meta, 0), acum = meses.reduce((s, m) => s + m.resultado, 0);
+  const cumplen = meses.filter(m => m.vsMeta >= 0).length;
+  const pctTotal = meta ? acum / meta : 0, dif = acum - meta;
   const color = pctTotal >= 1 ? "var(--green)" : pctTotal >= 0.6 ? "var(--sand)" : "var(--rose)";
-  const lista = filas.map(f => `<div class="mes" style="grid-template-columns:52px 1fr 92px;cursor:default"><span>${f.label}</span>
-    <div class="bar"><i style="width:${Math.max(2, Math.min(100, f.metaAcum ? f.acum / f.metaAcum * 100 : 0))}%;background:${f.acum >= f.metaAcum ? "var(--green)" : "#b9d3e6"}"></i></div>
-    <span title="ahorro del mes">${money(f.ahorro)}</span></div>`).join("");
+  const cerrados = d.pasados || [];
+  const real = cerrados.length ? `<div class="row"><span>Meses ya cerrados (${cerrados.length})</span><span>${money(cerrados.reduce((s, m) => s + m.resultado, 0))} de ${money(cerrados.reduce((s, m) => s + m.meta, 0))}</span></div>` : "";
   return `
     <div class="big" style="background:${color}"><small>Ahorro proyectado a 12 meses</small><b>${money(acum)}</b></div>
     <div class="card">
-      <div class="row"><span>Objetivo (${pct(0.2)} del ingreso por mes)</span><span>${money(meta)}</span></div>
-      <div class="bar" style="height:12px;background:var(--sand);border-radius:8px;overflow:hidden;margin:6px 0 10px"><i style="display:block;height:100%;width:${ancho}%;background:${pctTotal >= 1 ? "var(--ok)" : "#8fb6d3"};border-radius:8px"></i></div>
+      <div class="row"><span>Objetivo (${pct(0.2)} del ingreso)</span><span>${money(meta)}</span></div>
+      <div class="hbar" style="height:12px;margin:6px 0 10px"><i style="width:${Math.max(0, Math.min(100, pctTotal * 100))}%"></i></div>
       <div class="row"><span>Avance</span><span><b>${pct(pctTotal)}</b></span></div>
-      <div class="row"><span>${dif >= 0 ? "Por encima del objetivo" : "Falta para el objetivo"}</span>
-        <span style="color:${dif >= 0 ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(dif))}</span></div>
-      <div class="row"><span>Meses que cumplen la meta</span><span>${cumplen} de ${meses.length}</span></div>
+      <div class="row"><span>${dif >= 0 ? "Por encima del objetivo" : "Falta para el objetivo"}</span><span style="color:${dif >= 0 ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(dif))}</span></div>
+      <div class="row"><span>Meses que llegan a la meta</span><span>${cumplen} de ${meses.length}</span></div>
+      ${real}
     </div>
-    <h2>Acumulado mes a mes</h2>
-    <div class="card">${lista}
-      <div class="vacio" style="text-align:left;padding-bottom:0">La barra es el acumulado contra la meta acumulada (verde = al día). A la derecha, lo que queda cada mes.</div></div>
-    <div class="vacio" style="text-align:left">Es una proyección con lo ya comprometido (fijos, cuotas y consumos del mes). No incluye gastos nuevos que todavía no cargaste.</div>`;
+    <h2>Mes por mes</h2>
+    <div id="objMes">${htmlObjMes()}</div>
+    <div class="vacio" style="text-align:left">Proyección con lo ya comprometido (fijos, cuotas y consumos cargados). No incluye gastos que todavía no cargaste. Cada mes se congela al terminar.</div>`;
+}
+
+function htmlObjMes() {
+  const m = objTodos[objIdx];
+  const chips = objTodos.map((x, i) => `<button class="chip ${i === objIdx ? "on" : ""} ${x.estado}" onclick="selObj(${i})">${x.label}</button>`).join("");
+  const estado = m.estado === "cerrado" ? "Cerrado" : m.estado === "actual" ? "En curso" : "Proyectado";
+  const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${money(sc.total)}</span></div>` +
+    sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}</span></div>`).join("")).join("");
+  const ok = m.vsMeta >= 0;
+  return `<div class="chips" id="chips">${chips}</div>
+    <div class="card" id="objCard" ontouchstart="tocarObj(event)" ontouchend="tocarObj(event)">
+      <div class="nav-mes" style="margin-bottom:6px"><button class="mini" onclick="selObj(${objIdx - 1})" ${objIdx <= 0 ? "disabled" : ""}>‹</button>
+        <b>${m.labelLargo}<span class="tag">${estado}</span></b>
+        <button class="mini" onclick="selObj(${objIdx + 1})" ${objIdx >= objTodos.length - 1 ? "disabled" : ""}>›</button></div>
+      <div class="row"><span><b>Ingreso</b> <small>(facturado el mes anterior)</small></span><span><b>${money(m.ingreso)}</b></span></div>
+      ${sec}
+      <div class="sec"><span>Total a pagar</span><span>${money(m.total)}</span></div>
+      <div class="sec"><span>Te queda</span><span style="color:${m.resultado >= 0 ? "var(--ok)" : "var(--bad)"}">${money(m.resultado)}</span></div>
+      <div class="row"><span>Meta de ahorro (${pct(0.2)} del ingreso)</span><span>${money(m.meta)}</span></div>
+      <div class="row"><span>${ok ? "Superás la meta por" : "Te faltan para la meta"}</span><span style="color:${ok ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(m.vsMeta))}</span></div>
+    </div>`;
+}
+
+function selObj(i) {
+  if (i < 0 || i >= objTodos.length) return;
+  objIdx = i; $("objMes").innerHTML = htmlObjMes();
+  const c = document.querySelector("#chips .chip.on"); if (c) c.scrollIntoView({ inline: "center", block: "nearest" });
+}
+let tocX = null;
+function tocarObj(e) {
+  if (e.type === "touchstart") { tocX = e.touches[0].clientX; return; }
+  if (tocX === null) return;
+  const dx = e.changedTouches[0].clientX - tocX; tocX = null;
+  if (Math.abs(dx) > 60) selObj(objIdx + (dx < 0 ? 1 : -1));
 }
 
 let mesSel = 0;
-const pct = (x) => (x * 100).toFixed(1).replace(".", ",") + "%";
-function selMes(i) { mesSel = i; $("vista").innerHTML = htmlDeuda(cache.deuda); }
 
 function htmlDeuda(d) {
-  const maxAbs = Math.max(1, ...d.meses.map(m => Math.abs(m.resultado)));
-  const barras = d.meses.map((m, i) => {
-    const color = m.resultado < 0 ? "var(--rose)" : m.vsMeta >= 0 ? "var(--green)" : "var(--sand)";
-    return `<div class="mes ${i === mesSel ? "sel" : ""}" onclick="selMes(${i})"><span>${m.label}</span>
-      <div class="bar"><i style="width:${Math.max(3, Math.abs(m.resultado) / maxAbs * 100)}%;background:${color}"></i></div>
-      <span>${pct(m.pct)}</span></div>`;
-  }).join("");
-  const m = d.meses[mesSel];
-  const lineas = m.lineas.map(l => `<div class="row"><span>${l.nombre}</span><span>${money(l.monto)}</span></div>`).join("");
-  const cumple = m.vsMeta >= 0;
-  const lista = d.cuotas.map(c => `<div class="venc"><div>${c.concepto}<small>${c.restantes} cuota(s) · ${c.tarjeta || "sin tarjeta"}</small></div>
-    <div>${money(c.monto)}</div></div>`).join("") || `<div class="vacio">Sin cuotas</div>`;
+  const bruto = (m) => m.secciones.filter(sc => sc.tipo === "cuotas" && sc.titulo !== "Descuento de alquiler").reduce((a, sc) => a + sc.total, 0);
+  const max = Math.max(1, ...d.meses.map(bruto));
+  const filas = d.meses.map(m => `<div class="mes" style="grid-template-columns:52px 1fr 92px;cursor:default"><span>${m.label}</span>
+    <div class="hbar"><i style="width:${Math.max(2, bruto(m) / max * 100)}%"></i></div><span>${money(bruto(m))}</span></div>`).join("");
+  const grupos = {};
+  d.cuotas.forEach(c => { const t = c.tarjeta || "Sin tarjeta"; (grupos[t] = grupos[t] || []).push(c); });
+  const lista = Object.keys(grupos).sort().map(t => `<div class="sec"><span>${esc(t)}</span><span>${money(grupos[t].reduce((a, c) => a + c.monto, 0))} / mes</span></div>` +
+    grupos[t].map(c => `<div class="sub"><span>${esc(c.concepto)} <small>· quedan ${c.restantes}${c.empieza ? ", empieza en " + c.empieza : ""}, termina en ${c.termina}</small></span><span>${money(c.monto)}</span></div>`).join("")).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
     <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>
-    <h2>Resultado por mes (% del ingreso)</h2>
-    <div class="card">${barras}
-      <div class="vacio" style="text-align:left;padding-bottom:0">Verde: cumple el objetivo de ahorro · arena: ahorra pero no llega · rosa: negativo</div></div>
-    <h2>${m.label}</h2>
-    <div class="card">${lineas}
-      <div class="row" style="border-top:1px solid var(--line);margin-top:6px"><span>Total compromisos</span><span>${money(m.total)}</span></div>
-      <div class="row"><span>Ingreso</span><span>${money(m.ingreso)}</span></div>
-      <div class="row"><span><b>Resultado</b></span><span><b>${money(m.resultado)}</b></span></div>
-      <div class="row"><span>Objetivo ${pct(0.2)} del ingreso</span><span>${money(m.meta)}</span></div>
-      <div class="row"><span>${cumple ? "Sobre el objetivo" : "Falta para el objetivo"}</span>
-        <span style="color:${cumple ? "var(--ok)" : "var(--bad)"}">${money(Math.abs(m.vsMeta))}</span></div>
-    </div>
-    <h2>Cuotas activas</h2>
+    <h2>Lo que pagás de cuotas cada mes</h2>
+    <div class="card">${filas}<div class="vacio" style="text-align:left;padding-bottom:0">Cuotas y préstamo, sin descuentos. Baja a medida que terminan.</div></div>
+    <h2>Tus cuotas</h2>
     <div class="card">${lista}</div>`;
 }
 
@@ -350,6 +406,7 @@ function htmlCargar() {
       ${fac ? `<div class="campo"><label>Vencimiento</label><input id="cVto" type="date" onchange="previa()"></div>`
             : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
     </div>
+    ${fac ? "" : `<label class="tilde"><input type="checkbox" id="cSig" onchange="previa()"><span>Siguiente resumen<small>Marcalo si el consumo fue después del cierre de la tarjeta: se empieza a pagar un mes más tarde.</small></span></label>`}
     <div class="nota" id="cNota"></div>
     <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>
     <label class="btn btn2" for="cFoto">Leer desde foto</label>
@@ -360,21 +417,34 @@ function htmlCargar() {
 function setTipo(t) { tipoCarga = t; $("vista").innerHTML = htmlCargar(); }
 
 // Acepta "45833", "45.833" o "45.833,50".
-function leerMonto(txt) { return Number(String(txt || "").replace(/\./g, "").replace(",", ".")); }
+// Acepta "45833", "45.833", "45.833,50", "16600.63" y "16600,63". Con coma, la coma son los decimales;
+// sin coma, un punto con 3 dígitos detrás es separador de miles y cualquier otro punto es decimal.
+function leerMonto(txt) {
+  let t = String(txt || "").replace(/[$\s]/g, "");
+  if (t.indexOf(",") >= 0) t = t.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  return Number(t);
+}
+const money2 = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(Number(n || 0)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function mesPago(sig) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + (sig ? 2 : 1)); return d.toLocaleDateString("es-AR", { month: "long", year: "numeric" }); }
 function fechaCorta(iso) { const [a, m, d] = String(iso).split("-"); return `${d}/${m}`; }
 
 function previa() {
   const m = leerMonto($("cMonto").value);
   const n = $("cCuotas") ? Number($("cCuotas").value) : 0;
   $("cNota").className = "nota";
-  $("cNota").textContent = tipoCarga === "cuotas" && m > 0 && n >= 2 ? `${n} cuotas de ${money(m)} · total ${money(m * n)}` : "";
+  const sig = $("cSig") ? $("cSig").checked : false;
+  const partes = [];
+  if (m > 0) partes.push(tipoCarga === "cuotas" && n >= 2 ? `${n} cuotas de ${money2(m)} · total ${money2(m * n)}` : money2(m));
+  if (tipoCarga !== "factura") partes.push(`se paga por primera vez en ${mesPago(sig)}`);
+  $("cNota").textContent = partes.join(" · ");
 }
 
 async function enviarCarga() {
   const nota = $("cNota"), btn = $("cBtn"), fac = tipoCarga === "factura";
   const datos = { tipo: tipoCarga, concepto: $("cConcepto").value.trim(), monto: leerMonto($("cMonto").value),
     tarjeta: $("cTarjeta") ? $("cTarjeta").value : "", cuotas: $("cCuotas") ? Number($("cCuotas").value) : 1,
-    vencimiento: $("cVto") ? $("cVto").value : "" };
+    vencimiento: $("cVto") ? $("cVto").value : "", siguiente: $("cSig") ? $("cSig").checked : false };
   const falta = !datos.concepto || !(datos.monto > 0) || (tipoCarga === "cuotas" && !(datos.cuotas >= 2)) || (fac && !datos.vencimiento);
   if (falta) { nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return; }
   btn.disabled = true; nota.className = "nota"; nota.textContent = "Guardando…";
@@ -383,7 +453,7 @@ async function enviarCarga() {
     $("vista").innerHTML = htmlCargar();
     $("cNota").className = "nota ok";
     $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}`
-      : `Guardado: ${datos.concepto} · ${money(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""}`;
+      : `Guardado: ${datos.concepto} · ${money2(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""} · se paga desde ${mesPago(datos.siguiente)}`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
@@ -422,17 +492,19 @@ function htmlItem(p, i) {
   const fac = modoItems === "factura";
   const campos = fac ? `
     <div class="fila">
-      <div class="campo"><label>Monto</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}"></div>
+      <div class="campo"><label>Monto</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}" oninput="$('iE${i}').textContent = money2(leerMonto(this.value))"></div>
       <div class="campo"><label>Vencimiento</label><input id="iV${i}" type="date" value="${p.vencimiento}"></div>
     </div>` : `
     <div class="fila">
-      <div class="campo"><label>Monto cuota</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}"></div>
+      <div class="campo"><label>Monto cuota</label><input id="iM${i}" type="text" inputmode="decimal" value="${p.monto}" oninput="$('iE${i}').textContent = money2(leerMonto(this.value))"></div>
       <div class="campo"><label>Cuotas</label><input id="iN${i}" type="number" inputmode="numeric" min="1" max="36" value="${p.cuotas}"></div>
     </div>
     <div class="campo"><label>Tarjeta</label><select id="iT${i}"><option value="">Elegir…</option>${TARJETAS.map(t => `<option ${t === p.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
   return `<div class="item" id="it${i}">
     <div class="campo"><label>Concepto</label><input id="iC${i}" type="text" value="${esc(p.concepto)}"></div>
     ${campos}
+    <div class="nota" id="iE${i}" style="margin-bottom:4px">${money2(p.monto)}</div>
+    ${fac ? "" : `<label class="tilde"><input type="checkbox" id="iS${i}"><span>Siguiente resumen<small>Después del cierre de la tarjeta: se paga un mes más tarde.</small></span></label>`}
     <div class="nota" id="iNota${i}"></div>
     <div class="acc"><button class="descartar" onclick="descartar(${i})">Descartar</button><button class="guardar" id="iG${i}" onclick="guardarItem(${i})">Guardar</button></div>
   </div>`;
@@ -444,7 +516,7 @@ async function guardarItem(i) {
   const fac = modoItems === "factura", nota = $("iNota" + i), btn = $("iG" + i);
   const n = fac ? 1 : Number($("iN" + i).value);
   const datos = { tipo: n >= 2 ? "cuotas" : "unico", concepto: $("iC" + i).value.trim(), monto: leerMonto($("iM" + i).value), cuotas: n,
-    tarjeta: fac ? "" : $("iT" + i).value, vencimiento: fac ? $("iV" + i).value : "" };
+    tarjeta: fac ? "" : $("iT" + i).value, vencimiento: fac ? $("iV" + i).value : "", siguiente: fac ? false : $("iS" + i).checked };
   if (!datos.concepto || !(datos.monto > 0) || (fac ? !datos.vencimiento : !datos.tarjeta)) {
     nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return;
   }
@@ -452,7 +524,7 @@ async function guardarItem(i) {
   try {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     const el = $("it" + i); el.classList.add("hecho");
-    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : n >= 2 ? " × " + n : ""}</div>`;
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente)}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
