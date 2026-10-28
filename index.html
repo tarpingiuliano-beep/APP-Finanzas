@@ -154,16 +154,29 @@ const cache = {};
 function guardar(c) { try { sessionStorage.setItem("k", c); } catch (e) {} }
 function leer() { try { return sessionStorage.getItem("k"); } catch (e) { return null; } }
 
+// Acciones que se pueden repetir sin riesgo (leer, o guardar el mismo dato dos veces da lo mismo).
+const REPETIBLES = ["inicio", "deuda", "objetivo", "facturacion", "guardarJornada", "guardarValores", "editarFactura"];
+
 async function api(accion, datos) {
   if (!window.API_URL) throw new Error("Falta configurar API_URL en config.js");
-  const r = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ clave, accion, datos })
-  });
-  const d = await r.json();
-  if (!d.ok) throw new Error(d.error || "Error");
-  return d.data;
+  for (let intento = 1; intento <= 2; intento++) {
+    let d = null;
+    try {
+      const r = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ clave, accion, datos })
+      });
+      d = JSON.parse(await r.text());
+    } catch (e) {
+      // A veces Google contesta con una página que no es JSON aunque el pedido sí llegó.
+      if (intento === 1 && REPETIBLES.indexOf(accion) >= 0) continue;
+      throw new Error(REPETIBLES.indexOf(accion) >= 0 ? "No pude conectarme. Probá de nuevo." :
+        "No recibí confirmación de Google. Puede que se haya guardado: revisalo antes de volver a cargarlo.");
+    }
+    if (!d.ok) throw new Error(d.error || "Error");
+    return d.data;
+  }
 }
 
 function mostrarLogin(msg) {
