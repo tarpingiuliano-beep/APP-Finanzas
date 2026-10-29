@@ -813,6 +813,8 @@ function recordatorioFacturacion(hoy) {
   const par = leerParametros(), f = fechaTxt(hoy);
   const money = (n) => "$" + Math.round(n).toLocaleString("es-AR");
   const linea = (t, lista) => { const v = vigenteDesde(lista, f); return t + ": " + (v ? money(v.valor) + " (desde " + v.desde.slice(8) + "/" + v.desde.slice(5, 7) + ")" : "sin cargar"); };
-  return linea("Valor hora", par.valorHora) + "\n" + linea("Monotributo", par.monotributo) + "\n" + linea("Obra social", par.obraSocial) +
-    "\n\nSi cambió alguno, actualizalo en Horas antes de facturar.";
+  const mes = MESES_LARGO[hoy.getMonth()], primero = "01/" + ("0" + (hoy.getMonth() + 1)).slice(-2);
+  return "Para facturar " + mes + ", revisá los valores de este mes:\n" +
+    linea("Valor hora", par.valorHora) + "\n" + linea("Monotributo", par.monotributo) + "\n" + linea("Obra social", par.obraSocial) +
+    "\n\nSi cambió alguno: Horas → Cambiar, con fecha desde " + primero + " para que rija todo " + mes + ".";
 }

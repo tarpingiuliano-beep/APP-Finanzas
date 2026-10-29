@@ -643,8 +643,7 @@ async function editarValor(c) {
   if (t === null) return;
   const valor = leerMonto(t);
   if (!(valor > 0)) { alert("Valor inválido"); return; }
-  const hoy = new Date(), iso = hoy.getFullYear() + "-" + ("0" + (hoy.getMonth() + 1)).slice(-2) + "-" + ("0" + hoy.getDate()).slice(-2);
-  const desde = prompt("¿Desde qué fecha rige? (AAAA-MM-DD)", iso);
+  const desde = prompt("¿Desde qué fecha rige? (AAAA-MM-DD). Por defecto, el 1 del mes que estás viendo, así rige todo el mes.", horasMes + "-01");
   if (!desde || !/^\d{4}-\d{2}-\d{2}$/.test(desde)) { alert("Fecha inválida"); return; }
   if (!confirm(`¿Guardar ${NOMBRE_VAL[c]} ${money(valor)} desde ${dmy(desde)}?`)) return;
   try { mostrarHoras(await api("guardarValores", { concepto: c, desde, valor, mes: horasMes })); }
