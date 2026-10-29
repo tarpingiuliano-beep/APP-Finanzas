@@ -652,12 +652,22 @@ async function editarValor(c) {
 
 function imprimirHoras() {
   const d = horasData;
-  const filas = d.dias.filter(x => x.entrada || x.ho).map(x =>
-    `<tr><td>${x.dia} ${x.num}/${x.fecha.slice(5, 7)}</td><td>${x.entrada || "-"}</td><td>${x.salida || "-"}</td><td>${hh(x.pres)}</td><td>${hh(x.ho)}</td><td>${hh(x.total)}</td><td>${money(x.valorHora)}</td><td>${money(x.monto)}</td></tr>`).join("");
+  const trab = d.dias.filter(x => x.entrada || x.ho);
+  // Valor hora: uno solo, o los tramos si cambió dentro del mes.
+  const tramos = [];
+  trab.forEach(x => { const u = tramos[tramos.length - 1]; if (!u || u.v !== x.valorHora) tramos.push({ v: x.valorHora, desde: x.fecha }); });
+  const vh = tramos.length <= 1 ? money(tramos.length ? tramos[0].v : 0)
+    : tramos.map((t, i) => money(t.v) + (i === 0 ? "" : " desde " + dmy(t.desde))).join(" · ");
+  const filas = trab.map(x =>
+    `<tr><td>${x.dia} ${x.num}/${x.fecha.slice(5, 7)}</td><td>${x.entrada || "-"}</td><td>${x.salida || "-"}</td><td>${hh(x.pres)}</td><td>${hh(x.ho)}</td><td>${hh(x.total)}</td><td>${money(x.monto)}</td></tr>`).join("");
+  const pie = (txt, val, neg) => `<tr${neg ? ' style="font-weight:700"' : ""}><td colspan="6">${txt}</td><td>${val}</td></tr>`;
   $("impresion").innerHTML = `<h1>Resumen de horas · ${d.label}</h1>
-    <table><tr><th>Día</th><th>Entrada</th><th>Salida</th><th>Hs oficina</th><th>Hs home office</th><th>Total hs</th><th>Valor hora</th><th>Monto</th></tr>${filas}
-    <tr><th colspan="5">Total horas</th><th>${hh(d.horas)}</th><th>Subtotal</th><th>${money(d.montoHoras)}</th></tr></table>
-    <p>Cuota monotributo: ${money(d.monotributo)}<br>Medicina prepaga: ${money(d.obraSocial)}<br><b>TOTAL FACTURA: ${money(d.total)}</b></p>`;
+    <p style="margin:0 0 8px"><b>Valor hora: ${vh}</b></p>
+    <table><tr><th>Día</th><th>Entrada</th><th>Salida</th><th>Hs oficina</th><th>Hs home office</th><th>Total hs</th><th>Monto</th></tr>${filas}
+    <tr style="font-weight:700"><td colspan="5">Total horas</td><td>${hh(d.horas)}</td><td>${money(d.montoHoras)}</td></tr>
+    ${pie("Cuota monotributo", money(d.monotributo))}
+    ${pie("Medicina prepaga", money(d.obraSocial))}
+    ${pie("TOTAL FACTURA", money(d.total), true)}</table>`;
   window.print();
 }
 
