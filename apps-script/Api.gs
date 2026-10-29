@@ -134,7 +134,7 @@ function proyectar(n) {
     const ingreso = fact > 0 ? fact : manual;
 
     const secciones = [];
-    secciones.push({ titulo: "Fijos", tipo: "fijos", items: cf.items.map(f => {
+    secciones.push({ titulo: "Fijos", tipo: "fijos", items: cf.items.filter(f => !f.desde || key >= f.desde).map(f => {
       if (f.psico && key >= PRIMER_MES_SESIONES) { const v = viernesDelMes(anio, m0); return { nombre: "Psicoanalista (" + v + " viernes)", monto: PRECIO_SESION * v }; }
       return { nombre: f.nombre, monto: f.monto };
     }) });
@@ -332,7 +332,7 @@ function fechaTxt(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(
 
 function categoriaFactura(c) {
   if (/universidad/i.test(c)) return "Universidad";
-  if (/monotributo|impuesto|arba|\bapi\b/i.test(c)) return "Impuesto";
+  if (/monotributo|impuesto|arba|\bapi\b|iibb|ingresos brutos/i.test(c)) return "Impuesto";
   if (/pr[eé]stamo|tarjeta|cr[eé]dito/i.test(c)) return "Crédito";
   if (/luz|gas|agua|movistar|internet|tel[eé]fono|celular/i.test(c)) return "Servicio";
   return "Factura";
@@ -741,7 +741,7 @@ function ingresoFacturado() {
 // Fijos del mes: lo de la hoja Fijos, con Monotributo y Obra social/Prepaga tomados de los valores vigentes.
 function calcularFijos() {
   return memo("fijos", () => {
-    const filas = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos").getRange("A2:B").getValues();
+    const filas = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos").getRange("A2:C").getValues();
     const par = leerParametros(), hoy = fechaTxt(new Date());
     const mono = vigente(par.monotributo, hoy), obra = vigente(par.obraSocial, hoy);
     const items = [];
@@ -752,7 +752,7 @@ function calcularFijos() {
       let v = r[1];
       if (/monotributo/i.test(n) && mono) v = mono;
       if (/prepaga|obra social|medicina/i.test(n)) { tieneObra = true; if (obra) v = obra; }
-      items.push({ nombre: n, monto: v, psico: /psicoan/i.test(n) });
+      items.push({ nombre: n, monto: v, psico: /psicoan/i.test(n), desde: textoMes(r[2]) });   // "desde" (col. C) es opcional: el fijo cuenta desde ese mes
     });
     if (!tieneObra && obra) items.push({ nombre: "Obra social / prepaga", monto: obra, psico: false });
     const total = items.reduce((a, x) => a + x.monto, 0);
