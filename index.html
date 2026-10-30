@@ -137,6 +137,7 @@
   <button data-v="deuda">Deuda</button>
   <button data-v="objetivo">Objetivo</button>
   <button data-v="horas">Horas</button>
+  <button data-v="inversion">Inversión</button>
   <button data-v="cargar">Cargar</button>
 </nav>
 
@@ -155,7 +156,7 @@ function guardar(c) { try { sessionStorage.setItem("k", c); } catch (e) {} }
 function leer() { try { return sessionStorage.getItem("k"); } catch (e) { return null; } }
 
 // Acciones que se pueden repetir sin riesgo (leer, o guardar el mismo dato dos veces da lo mismo).
-const REPETIBLES = ["inicio", "deuda", "objetivo", "facturacion", "guardarJornada", "guardarValores", "editarFactura"];
+const REPETIBLES = ["inversiones", "inicio", "deuda", "objetivo", "facturacion", "guardarJornada", "guardarValores", "editarFactura"];
 
 async function api(accion, datos) {
   if (!window.API_URL) throw new Error("Falta configurar API_URL en config.js");
@@ -197,9 +198,10 @@ async function entrar(c) {
 async function cargar(v) {
   vistaActual = v;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
-  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", cargar: "Cargar" }[v];
+  $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", inversion: "Inversión", cargar: "Cargar" }[v];
   if (v === "cargar") { $("vista").innerHTML = htmlCargar(); return; }
   if (v === "horas") { await cargarHoras(horasMes); return; }
+  if (v === "inversion") { invNav = { v: "main" }; await invCargar(); return; }
   const d = await api(v);
   cache[v] = d;
   if (v === "objetivo") objIdx = null;
@@ -685,6 +687,183 @@ function imprimirHoras() {
 
 $("formLogin").addEventListener("submit", (e) => { e.preventDefault(); entrar($("clave").value); });
 $("salir").addEventListener("click", () => { try { sessionStorage.removeItem("k"); } catch (e) {} clave = null; mostrarLogin(); });
+
+// ==== Inversión ====
+let invData = null, invNav = { v: "main" };
+const usd2 = (n) => (n < 0 ? "-" : "") + "US$ " + Math.abs(Number(n || 0)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fm = (n, mon) => mon === "USD" ? usd2(n) : money(n);
+const hoyIso = () => { const d = new Date(); return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); };
+const fechaLarga = (iso) => { const [a, m, d] = String(iso).split("-"); return `${d}/${m}/${a.slice(2)}`; };
+const sgn = (x) => x === null || x === undefined ? "—" : (x > 0 ? "+" : "") + pct(x);
+const clr = (x) => x > 0 ? "ok" : x < 0 ? "mal" : "";
+
+async function invCargar() {
+  invData = await api("inversiones");
+  $("vista").innerHTML = htmlInv();
+}
+function invIr(v, extra) { invNav = Object.assign({ v }, extra || {}); $("vista").innerHTML = htmlInv(); window.scrollTo(0, 0); }
+async function invAccion(accion, datos, btn) {
+  if (btn) btn.disabled = true;
+  try { invData = await api(accion, datos); return true; }
+  catch (e) { alert(e.message); if (btn) btn.disabled = false; return false; }
+}
+
+function htmlInv() {
+  const n = invNav;
+  if (n.v === "cartera") return htmlInvCartera(n.nombre);
+  if (n.v === "activo") return htmlInvActivo(n.id);
+  if (n.v === "reeval") return htmlInvReeval(n.nombre);
+  if (n.v === "alta") return htmlInvAlta(n.nombre);
+  return htmlInvMain();
+}
+
+function lineaRend(porMoneda) {
+  return Object.keys(porMoneda).map(m => {
+    const o = porMoneda[m];
+    return `<span class="${clr(o.ganancia)}">${m}: ${sgn(o.rend)}${o.anual !== null ? ` · ${sgn(o.anual)} anual` : ""}</span>`;
+  }).join(" &nbsp; ");
+}
+
+function htmlInvMain() {
+  const d = invData;
+  const cars = d.carteras.map(c => `<div class="card" style="cursor:pointer" onclick="invIr('cartera',{nombre:'${c.nombre}'})">
+      <div class="row" style="font-weight:600"><span style="color:var(--text)">${esc(c.nombre)}</span><span>${money(c.totalArs)}</span></div>
+      <div style="font-size:13px">${Object.keys(c.porMoneda).length ? lineaRend(c.porMoneda) : `<span style="color:var(--muted)">Sin activos todavía</span>`}</div></div>`).join("");
+  const plat = Object.keys(d.plataformas).map(k => `<div class="row"><span>${esc(k)}</span><span>${money(d.plataformas[k])}</span></div>`).join("");
+  return `
+    <div class="big pos"><small>Patrimonio invertido</small><b>${money(d.total)}</b>
+      <small style="margin-top:6px">${d.usd ? `Dólar oficial ${money2(d.usd)} para convertir los activos en USD` : "No pude traer el dólar oficial: los activos en USD no suman al total"}</small></div>
+    <h2>Carteras</h2>${cars}
+    ${plat ? `<h2>Por plataforma</h2><div class="card">${plat}</div>` : ""}
+    <button class="btn" onclick="invIr('alta',{nombre:''})">+ Sumar activo</button>
+    <div class="nota" style="margin-top:12px">Rendimiento: ganancia sobre lo aportado desde el día de la primera compra. Anual: tasa efectiva anual equivalente, para comparar con un plazo fijo (aparece a los 30 días).</div>`;
+}
+
+function htmlInvCartera(nombre) {
+  const c = invData.carteras.find(x => x.nombre === nombre);
+  const acts = invData.activos.filter(a => a.cartera === nombre);
+  const bloques = Object.keys(c.porMoneda).map(m => {
+    const o = c.porMoneda[m];
+    let bench = "";
+    if (o.bench) {
+      const b = o.bench, dif = (x) => o.valor - x;
+      bench = `<h2>¿Y si hubiera ido a otro lado? (${m})</h2><div class="card">
+        <div class="row"><span>Hoy tenés</span><span><b>${fm(o.valor, m)}</b></span></div>
+        ${b.sinDatos ? "" : `<div class="row"><span>Plazo fijo</span><span>${fm(b.pf, m)} <small class="${clr(dif(b.pf))}">(${dif(b.pf) >= 0 ? "ganás " : "perdés "}${fm(Math.abs(dif(b.pf)), m)})</small></span></div>`}
+        <div class="row"><span>Inflación${b.ultimoIpc ? ` (hasta ${b.ultimoIpc})` : ""}</span><span>${fm(b.ipc, m)} <small class="${clr(dif(b.ipc))}">(${dif(b.ipc) >= 0 ? "ganás " : "perdés "}${fm(Math.abs(dif(b.ipc)), m)})</small></span></div>
+        <div class="nota" style="margin:8px 0 0">Mismos aportes y retiros, en las mismas fechas. "Perdés" significa que ese otro destino hubiera rendido más.</div></div>`;
+    }
+    return `<div class="card">
+      <div class="row"><span>Moneda</span><span>${m}</span></div>
+      <div class="row"><span>Valor actual</span><span><b>${fm(o.valor, m)}</b></span></div>
+      <div class="row"><span>Aportado</span><span>${fm(o.compras, m)}</span></div>
+      ${o.ventas ? `<div class="row"><span>Retirado</span><span>${fm(o.ventas, m)}</span></div>` : ""}
+      <div class="row"><span>Ganancia</span><span class="${clr(o.ganancia)}">${(o.ganancia > 0 ? "+" : "") + fm(o.ganancia, m)}</span></div>
+      <div class="row"><span>Rendimiento total</span><span class="${clr(o.rend)}">${sgn(o.rend)}</span></div>
+      <div class="row"><span>Anualizado</span><span class="${clr(o.anual)}">${o.anual === null ? "<small>desde 30 días</small>" : sgn(o.anual)}</span></div>
+      <div class="row"><span>Desde</span><span>${fechaLarga(o.desde)}</span></div></div>${bench}`;
+  }).join("");
+  const lista = acts.map(a => `<div class="card" style="cursor:pointer" onclick="invIr('activo',{id:'${a.id}'})">
+      <div class="row" style="font-weight:600"><span style="color:var(--text)">${esc(a.activo)}</span><span>${fm(a.valor, a.moneda)}</span></div>
+      <div class="row" style="font-size:13px"><span>${esc(a.plataforma || "—")} · ${a.moneda}</span><span class="${clr(a.ganancia)}">${sgn(a.rend)}${a.anual !== null ? " · " + sgn(a.anual) + " anual" : ""}</span></div></div>`).join("");
+  return `
+    <div class="nav-mes"><button class="mini" onclick="invIr('main')">‹ Volver</button><b>${esc(nombre)}</b><span style="width:70px"></span></div>
+    <div class="big pos"><small>Total de la cartera</small><b>${money(c.totalArs)}</b></div>
+    ${bloques || `<div class="vacio">Esta cartera todavía no tiene activos</div>`}
+    <h2>Activos</h2>${lista || `<div class="vacio">Sumá el primero</div>`}
+    <div style="display:flex;gap:8px;margin-top:6px"><button class="btn" onclick="invIr('alta',{nombre:'${nombre}'})">+ Sumar activo</button>
+    ${acts.length ? `<button class="btn btn2" style="margin-top:0" onclick="invIr('reeval',{nombre:'${nombre}'})">Reevaluar</button>` : ""}</div>`;
+}
+
+function htmlInvActivo(id) {
+  const a = invData.activos.find(x => x.id === id), m = a.moneda;
+  const movs = a.movs.map(x => `<div class="row"><span>${fechaLarga(x.fecha)} · ${x.tipo === "compra" ? "Compra" : "Venta"}${x.nota && x.nota !== "Alta" ? " · " + esc(x.nota) : ""}</span>
+      <span>${fm(x.monto, m)} <button class="mini" onclick="invBorrarMov(${x.fila})">✕</button></span></div>`).join("");
+  return `
+    <div class="nav-mes"><button class="mini" onclick="invIr('cartera',{nombre:'${a.cartera}'})">‹ ${esc(a.cartera)}</button><b>${esc(a.activo)}</b><span style="width:70px"></span></div>
+    <div class="big pos"><small>${esc(a.plataforma || "—")} · ${m} · valuado el ${fechaLarga(a.valuado)}</small><b>${fm(a.valor, m)}</b></div>
+    <div class="card">
+      <div class="row"><span>Aportado</span><span>${fm(a.compras, m)}</span></div>
+      ${a.ventas ? `<div class="row"><span>Retirado</span><span>${fm(a.ventas, m)}</span></div>` : ""}
+      <div class="row"><span>Ganancia</span><span class="${clr(a.ganancia)}">${(a.ganancia > 0 ? "+" : "") + fm(a.ganancia, m)}</span></div>
+      <div class="row"><span>Rendimiento total</span><span class="${clr(a.rend)}">${sgn(a.rend)}</span></div>
+      <div class="row"><span>Anualizado</span><span class="${clr(a.anual)}">${a.anual === null ? "<small>desde 30 días</small>" : sgn(a.anual)}</span></div>
+      <div class="row"><span>Desde</span><span>${a.desde ? fechaLarga(a.desde) : "—"}</span></div></div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn" onclick="invForm('compra')">Compré</button><button class="btn btn2" style="margin-top:0" onclick="invForm('venta')">Vendí</button>
+      <button class="btn btn2" style="margin-top:0" onclick="invForm('valor')">Valor</button></div>
+    <div id="invForm"></div>
+    <h2>Movimientos</h2><div class="card">${movs || `<div class="vacio">Sin movimientos</div>`}</div>`;
+}
+function invForm(tipo) {
+  const a = invData.activos.find(x => x.id === invNav.id);
+  const titulo = { compra: "Monto comprado", venta: "Monto vendido", valor: "Valor actual según tu plataforma" }[tipo];
+  $("invForm").innerHTML = `<div class="card">
+    <div class="campo"><label>${titulo} (${a.moneda})</label><input id="fMonto" type="text" inputmode="decimal" autocomplete="off" placeholder="0"></div>
+    ${tipo === "valor" ? "" : `<div class="campo"><label>Fecha</label><input id="fFecha" type="date" value="${hoyIso()}"></div>`}
+    <button class="btn" id="fBtn" onclick="invGuardarForm('${tipo}')">Guardar</button></div>`;
+  $("fMonto").focus();
+}
+async function invGuardarForm(tipo) {
+  const monto = leerMonto($("fMonto").value);
+  if (!(monto >= 0) || (tipo !== "valor" && !(monto > 0))) { alert("Poné un monto válido"); return; }
+  const ok = tipo === "valor"
+    ? await invAccion("invReevaluar", { valores: [{ id: invNav.id, valor: monto }] }, $("fBtn"))
+    : await invAccion("invMov", { id: invNav.id, tipo, monto, fecha: $("fFecha").value }, $("fBtn"));
+  if (ok) invIr("activo", { id: invNav.id });
+}
+async function invBorrarMov(fila) {
+  if (!confirm("¿Borrar este movimiento? El valor actual se ajusta en sentido contrario.")) return;
+  if (await invAccion("invBorrarMov", { fila })) invIr("activo", { id: invNav.id });
+}
+
+function htmlInvReeval(nombre) {
+  const acts = invData.activos.filter(a => a.cartera === nombre);
+  const filas = acts.map((a, i) => `<div class="campo"><label>${esc(a.activo)} · ${esc(a.plataforma || "—")} (${a.moneda}) · antes ${fm(a.valor, a.moneda)}</label>
+    <input id="rv${i}" type="text" inputmode="decimal" autocomplete="off" placeholder="${a.valor}"></div>`).join("");
+  return `
+    <div class="nav-mes"><button class="mini" onclick="invIr('cartera',{nombre:'${nombre}'})">‹ Volver</button><b>Reevaluar ${esc(nombre)}</b><span style="width:70px"></span></div>
+    <div class="nota">Copiá el valor de cada activo desde tu plataforma. Los que dejes vacíos no cambian.</div>
+    <div class="card">${filas}</div>
+    <button class="btn" id="rvBtn" onclick="invGuardarReeval('${nombre}')">Guardar valores</button>`;
+}
+async function invGuardarReeval(nombre) {
+  const acts = invData.activos.filter(a => a.cartera === nombre), valores = [];
+  for (let i = 0; i < acts.length; i++) {
+    const t = $("rv" + i).value.trim();
+    if (!t) continue;
+    const v = leerMonto(t);
+    if (!(v >= 0)) { alert("Valor inválido en " + acts[i].activo); return; }
+    valores.push({ id: acts[i].id, valor: v });
+  }
+  if (!valores.length) { alert("No cargaste ningún valor"); return; }
+  if (await invAccion("invReevaluar", { valores }, $("rvBtn"))) invIr("cartera", { nombre });
+}
+
+function htmlInvAlta(nombre) {
+  const plats = ["IOL", "Wallbit"];
+  return `
+    <div class="nav-mes"><button class="mini" onclick="invIr('${nombre ? "cartera" : "main"}',{nombre:'${nombre}'})">‹ Volver</button><b>Sumar activo</b><span style="width:70px"></span></div>
+    <div class="card">
+      <div class="campo"><label>Cartera</label><select id="aCartera">${["Retiro", "Prepaga", "Ahorro general"].map(c => `<option ${c === nombre ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="campo"><label>Activo</label><input id="aActivo" type="text" autocomplete="off" placeholder="Ej: MELI (CEDEAR)"></div>
+      <div class="campo"><label>Plataforma</label><input id="aPlat" type="text" list="plats" autocomplete="off" placeholder="IOL, Wallbit…"><datalist id="plats">${plats.map(p => `<option value="${p}">`).join("")}</datalist></div>
+      <div class="campo"><label>Moneda</label><select id="aMoneda"><option>ARS</option><option>USD</option></select></div>
+      <div class="campo"><label>Valor actual</label><input id="aValor" type="text" inputmode="decimal" autocomplete="off" placeholder="0"></div>
+      <div class="campo"><label>Cuánto pusiste en total (si lo dejás vacío, es igual al valor actual)</label><input id="aAport" type="text" inputmode="decimal" autocomplete="off" placeholder="Opcional"></div>
+      <div class="campo"><label>Fecha de la compra (la primera, si hubo varias)</label><input id="aFecha" type="date" value="${hoyIso()}"></div>
+    </div>
+    <button class="btn" id="aBtn" onclick="invGuardarAlta()">Guardar activo</button>`;
+}
+async function invGuardarAlta() {
+  const valor = leerMonto($("aValor").value), t = $("aAport").value.trim();
+  if (!$("aActivo").value.trim()) { alert("Falta el nombre del activo"); return; }
+  if (!(valor >= 0)) { alert("Poné el valor actual"); return; }
+  const datos = { cartera: $("aCartera").value, activo: $("aActivo").value, plataforma: $("aPlat").value, moneda: $("aMoneda").value,
+    valor, aportado: t ? leerMonto(t) : "", fecha: $("aFecha").value };
+  if (await invAccion("invAlta", datos, $("aBtn"))) invIr("cartera", { nombre: datos.cartera });
+}
+
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => cargar(b.dataset.v).catch(e => mostrarLogin(e.message))));
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

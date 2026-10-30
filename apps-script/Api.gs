@@ -35,6 +35,11 @@ function doPost(e) {
     if (body.accion === "facturacion") return respuesta({ ok: true, data: apiFacturacion(body.datos || {}) });
     if (body.accion === "guardarJornada") return respuesta({ ok: true, data: guardarJornada(body.datos || {}) });
     if (body.accion === "guardarValores") return respuesta({ ok: true, data: guardarValores(body.datos || {}) });
+    if (body.accion === "inversiones") return respuesta({ ok: true, data: apiInversiones() });
+    if (body.accion === "invAlta") return respuesta({ ok: true, data: invAlta(body.datos || {}) });
+    if (body.accion === "invMov") return respuesta({ ok: true, data: invMov(body.datos || {}) });
+    if (body.accion === "invReevaluar") return respuesta({ ok: true, data: invReevaluar(body.datos || {}) });
+    if (body.accion === "invBorrarMov") return respuesta({ ok: true, data: invBorrarMov(body.datos || {}) });
     return respuesta({ ok: false, error: "Acción desconocida" });
   } catch (err) {
     return respuesta({ ok: false, error: "Error: " + err.message });
@@ -817,4 +822,234 @@ function recordatorioFacturacion(hoy) {
   return "Para facturar " + mes + ", revisá los valores de este mes:\n" +
     linea("Valor hora", par.valorHora) + "\n" + linea("Monotributo", par.monotributo) + "\n" + linea("Obra social", par.obraSocial) +
     "\n\nSi cambió alguno: Horas → Cambiar, con fecha desde " + primero + " para que rija todo " + mes + ".";
+}
+
+
+// ==== INVERSIONES ====
+// Hojas: "Inversiones" (A id, B cartera, C activo, D plataforma, E moneda, F valor actual, G fecha valuación),
+// "MovInv" (A fecha, B id, C tipo compra|venta, D monto, E nota), "ValInv" (A fecha, B id, C valor),
+// "Referencias" (A tipo ipc|pf, B mes yyyy-MM, C valor: ipc = variación mensual en %, pf = TNA en %).
+const CARTERAS = ["Retiro", "Prepaga", "Ahorro general"];
+
+function hojaInv(nombre, enc, textoCols) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let h = ss.getSheetByName(nombre);
+  if (h) return h;
+  h = ss.insertSheet(nombre);
+  h.getRange(1, 1, 1, enc.length).setValues([enc]).setFontWeight("bold");
+  if (textoCols) h.getRange(textoCols).setNumberFormat("@");
+  return h;
+}
+function hojaPos() { return hojaInv("Inversiones", ["Id", "Cartera", "Activo", "Plataforma", "Moneda", "Valor actual", "Valuado el"], "A:A"); }
+function hojaMov() { return hojaInv("MovInv", ["Fecha", "Id", "Tipo", "Monto", "Nota"], "A:B"); }
+function hojaVal() { return hojaInv("ValInv", ["Fecha", "Id", "Valor"], "A:B"); }
+function hojaRef() { return hojaInv("Referencias", ["Tipo", "Mes", "Valor"], "A:B"); }
+
+function hoyTxt() { return fechaTxt(new Date()); }
+function filas(h, cols) { return h.getLastRow() > 1 ? h.getRange(2, 1, h.getLastRow() - 1, cols).getValues() : []; }
+function txtFecha(v) { const f = aFecha(v); return f ? fechaTxt(f) : ""; }
+
+function leerPos() {
+  return filas(hojaPos(), 7).map((r, i) => ({ fila: i + 2, id: String(r[0]), cartera: String(r[1]), activo: String(r[2]),
+    plataforma: String(r[3]), moneda: String(r[4]) || "ARS", valor: Number(r[5]) || 0, valuado: txtFecha(r[6]) })).filter(p => p.id);
+}
+function leerMov() {
+  return filas(hojaMov(), 5).map((r, i) => ({ fila: i + 2, fecha: txtFecha(r[0]), id: String(r[1]), tipo: String(r[2]),
+    monto: Number(r[3]) || 0, nota: String(r[4] || "") })).filter(m => m.id);
+}
+
+// TIR anualizada (flujos con fecha). Devuelve null si no hay datos suficientes.
+function xirr(flujos) {
+  const f = flujos.filter(x => x.monto !== 0);
+  if (f.length < 2 || !f.some(x => x.monto < 0) || !f.some(x => x.monto > 0)) return null;
+  const t0 = Math.min.apply(null, f.map(x => x.t));
+  const van = (r) => f.reduce((a, x) => a + x.monto / Math.pow(1 + r, (x.t - t0) / 365), 0);
+  let lo = -0.99, hi = 100;
+  if (van(lo) * van(hi) > 0) return null;
+  for (let i = 0; i < 200; i++) { const m = (lo + hi) / 2; if (van(lo) * van(m) <= 0) hi = m; else lo = m; }
+  return (lo + hi) / 2;
+}
+
+function resumenPos(p, movs) {
+  const mm = movs.filter(m => m.id === p.id);
+  const compras = mm.filter(m => m.tipo === "compra").reduce((a, m) => a + m.monto, 0);
+  const ventas = mm.filter(m => m.tipo === "venta").reduce((a, m) => a + m.monto, 0);
+  const ganancia = p.valor + ventas - compras;
+  const desde = mm.length ? mm.map(m => m.fecha).sort()[0] : p.valuado;
+  const dias = desde ? Math.round((aFecha(p.valuado || hoyTxt()) - aFecha(desde)) / 86400000) : 0;
+  const flujos = mm.map(m => ({ t: aFecha(m.fecha).getTime() / 86400000, monto: m.tipo === "compra" ? -m.monto : m.monto }));
+  flujos.push({ t: aFecha(p.valuado || hoyTxt()).getTime() / 86400000, monto: p.valor });
+  const anual = dias >= 30 ? xirr(flujos) : null;
+  return { compras, ventas, ganancia, rend: compras > 0 ? ganancia / compras : null, anual, desde, dias };
+}
+
+// ---- Referencias (inflación y plazo fijo) ----
+function actualizarReferencias() {
+  const h = hojaRef();
+  const hoy = new Date();
+  const desdeMes = sumarMeses(mesKey(hoy), -36);
+  const existentes = {};
+  filas(h, 3).forEach(r => { existentes[String(r[0]) + "|" + String(r[1])] = true; });
+  const nuevas = [];
+  try {
+    const r = UrlFetchApp.fetch("https://apis.datos.gob.ar/series/api/series?ids=148.3_INIVELNAL_DICI_M_26&representation_mode=percent_change&start_date=" + desdeMes + "&limit=100&format=json", { muteHttpExceptions: true });
+    const d = JSON.parse(r.getContentText());
+    (d.data || []).forEach(x => { if (x[1] !== null) nuevas.push(["ipc", String(x[0]).slice(0, 7), Math.round(x[1] * 10000) / 100]); });
+  } catch (e) {}
+  try {
+    const hasta = fechaTxt(hoy), desde = desdeMes + "-01";
+    const r = UrlFetchApp.fetch("https://api.bcra.gob.ar/estadisticas/v3.0/monetarias/12?desde=" + desde + "&hasta=" + hasta + "&limit=3000", { muteHttpExceptions: true });
+    const d = JSON.parse(r.getContentText());
+    let res = d.results || [];
+    if (res.length && res[0].detalle) res = res[0].detalle;
+    const porMes = {};
+    res.forEach(x => { const k = String(x.fecha).slice(0, 7); (porMes[k] = porMes[k] || []).push(Number(x.valor)); });
+    Object.keys(porMes).forEach(k => { const a = porMes[k]; nuevas.push(["pf", k, Math.round(a.reduce((s, v) => s + v, 0) / a.length * 100) / 100]); });
+  } catch (e) {}
+  // El mes en curso de plazo fijo se reemplaza siempre; el resto solo se agrega si falta.
+  const mesActual = mesKey(hoy);
+  const aEscribir = nuevas.filter(n => !existentes[n[0] + "|" + n[1]]);
+  if (aEscribir.length) h.getRange(h.getLastRow() + 1, 1, aEscribir.length, 3).setValues(aEscribir);
+  PropertiesService.getScriptProperties().setProperty("REF_ACTUALIZADO", hoyTxt());
+  return aEscribir.length;
+}
+function leerReferencias() {
+  const ult = PropertiesService.getScriptProperties().getProperty("REF_ACTUALIZADO");
+  if (ult !== hoyTxt()) { try { actualizarReferencias(); } catch (e) {} }
+  const ipc = {}, pf = {};
+  filas(hojaRef(), 3).forEach(r => { const k = String(r[1]); const v = Number(r[2]); if (String(r[0]) === "ipc") ipc[k] = v; else if (String(r[0]) === "pf") pf[k] = v; });
+  return { ipc, pf };
+}
+// Cuánto valdría hoy un monto puesto en "fecha" si hubiera ido a plazo fijo / seguido la inflación.
+function valorBenchmark(fechaIso, monto, hastaIso, ref) {
+  const f = aFecha(fechaIso), h = aFecha(hastaIso);
+  if (!f || !h || h <= f) return { pf: monto, ipc: monto };
+  const meses = Object.keys(ref.pf).sort(), ultTna = meses.length ? ref.pf[meses[meses.length - 1]] : 0;
+  let pf = monto;
+  for (let d = new Date(f); d < h; ) {
+    const fin = new Date(Math.min(new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(), h.getTime()));
+    const dias = Math.round((fin - d) / 86400000);
+    const tna = ref.pf[mesKey(d)] !== undefined ? ref.pf[mesKey(d)] : ultTna;
+    pf *= 1 + tna / 100 * dias / 365;
+    d = fin;
+  }
+  // inflación: meses completos posteriores al mes de la fecha, hasta el último dato publicado
+  let ipc = monto;
+  const k0 = mesKey(f);
+  Object.keys(ref.ipc).sort().forEach(k => { if (k > k0 && k < mesKey(h)) ipc *= 1 + ref.ipc[k] / 100; });
+  return { pf, ipc };
+}
+
+function dolarOficial() {
+  const cache = CacheService.getScriptCache();
+  const c = cache.get("USD_OFICIAL");
+  if (c) return Number(c);
+  const guard = PropertiesService.getScriptProperties();
+  try {
+    const r = UrlFetchApp.fetch("https://dolarapi.com/v1/dolares/oficial", { muteHttpExceptions: true });
+    const v = Number(JSON.parse(r.getContentText()).venta);
+    if (v > 0) { cache.put("USD_OFICIAL", String(v), 21600); guard.setProperty("USD_ULTIMO", String(v)); return v; }
+  } catch (e) {}
+  return Number(guard.getProperty("USD_ULTIMO")) || 0;
+}
+
+function apiInversiones() {
+  const pos = leerPos(), movs = leerMov(), ref = leerReferencias(), usd = dolarOficial();
+  const hoy = hoyTxt();
+  const activos = pos.map(p => {
+    const r = resumenPos(p, movs);
+    return Object.assign({}, p, r, { movs: movs.filter(m => m.id === p.id).sort((a, b) => b.fecha.localeCompare(a.fecha)) });
+  });
+  const carteras = CARTERAS.map(nombre => {
+    const lista = activos.filter(a => a.cartera === nombre);
+    const porMoneda = {};
+    ["ARS", "USD"].forEach(mon => {
+      const l = lista.filter(a => a.moneda === mon);
+      if (!l.length) return;
+      const valor = l.reduce((a, x) => a + x.valor, 0), compras = l.reduce((a, x) => a + x.compras, 0), ventas = l.reduce((a, x) => a + x.ventas, 0);
+      const ids = {}; l.forEach(x => { ids[x.id] = true; });
+      const flujos = movs.filter(m => ids[m.id]).map(m => ({ t: aFecha(m.fecha).getTime() / 86400000, monto: m.tipo === "compra" ? -m.monto : m.monto }));
+      const ult = l.map(x => x.valuado).sort().pop() || hoy;
+      flujos.push({ t: aFecha(ult).getTime() / 86400000, monto: valor });
+      const desde = movs.filter(m => ids[m.id]).map(m => m.fecha).sort()[0] || ult;
+      const dias = Math.round((aFecha(ult) - aFecha(desde)) / 86400000);
+      const o = { moneda: mon, valor, compras, ventas, ganancia: valor + ventas - compras, rend: compras > 0 ? (valor + ventas - compras) / compras : null,
+        anual: dias >= 30 ? xirr(flujos) : null, desde, dias };
+      if (mon === "ARS") {
+        let pf = 0, ipc = 0;
+        movs.filter(m => ids[m.id]).forEach(m => { const b = valorBenchmark(m.fecha, m.monto, ult, ref); const s = m.tipo === "compra" ? 1 : -1; pf += s * b.pf; ipc += s * b.ipc; });
+        o.bench = { pf, ipc, ultimoIpc: Object.keys(ref.ipc).sort().pop() || "", sinDatos: !Object.keys(ref.pf).length };
+      }
+      porMoneda[mon] = o;
+    });
+    const totalArs = lista.reduce((a, x) => a + (x.moneda === "USD" ? x.valor * usd : x.valor), 0);
+    return { nombre, totalArs, porMoneda, activos: lista.map(a => a.id) };
+  });
+  const total = carteras.reduce((a, c) => a + c.totalArs, 0);
+  const plataformas = {};
+  activos.forEach(a => { plataformas[a.plataforma || "—"] = (plataformas[a.plataforma || "—"] || 0) + (a.moneda === "USD" ? a.valor * usd : a.valor); });
+  return { hoy, usd, total, carteras, activos, plataformas };
+}
+
+function invAlta(d) {
+  const cartera = String(d.cartera || ""), activo = String(d.activo || "").trim(), moneda = d.moneda === "USD" ? "USD" : "ARS";
+  if (CARTERAS.indexOf(cartera) < 0) throw new Error("Cartera inválida");
+  if (!activo) throw new Error("Falta el nombre del activo");
+  const valor = Number(d.valor);
+  if (!(valor >= 0)) throw new Error("El valor actual no es válido");
+  const aportado = d.aportado === "" || d.aportado === undefined || d.aportado === null ? valor : Number(d.aportado);
+  if (!(aportado >= 0)) throw new Error("Lo aportado no es válido");
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha || "")) ? d.fecha : hoyTxt();
+  if (fecha > hoyTxt()) throw new Error("La fecha no puede ser futura");
+  const id = "A" + Utilities.formatDate(new Date(), "America/Argentina/Buenos_Aires", "yyMMddHHmmss") + Math.floor(Math.random() * 9000 + 1000);
+  const hp = hojaPos();
+  hp.getRange(hp.getLastRow() + 1, 1, 1, 7).setValues([[id, cartera, activo, String(d.plataforma || "").trim(), moneda, valor, hoyTxt()]]);
+  if (aportado > 0) { const hm = hojaMov(); hm.getRange(hm.getLastRow() + 1, 1, 1, 5).setValues([[fecha, id, "compra", aportado, "Alta"]]); }
+  const hv = hojaVal(); hv.getRange(hv.getLastRow() + 1, 1, 1, 3).setValues([[hoyTxt(), id, valor]]);
+  return apiInversiones();
+}
+
+function invMov(d) {
+  const p = leerPos().filter(x => x.id === String(d.id))[0];
+  if (!p) throw new Error("No encuentro ese activo");
+  const tipo = d.tipo === "venta" ? "venta" : "compra";
+  const monto = Number(d.monto);
+  if (!(monto > 0)) throw new Error("El monto debe ser mayor a 0");
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha || "")) ? d.fecha : hoyTxt();
+  if (fecha > hoyTxt()) throw new Error("La fecha no puede ser futura");
+  if (tipo === "venta" && monto > p.valor + 0.005) throw new Error("No podés vender más de lo que vale hoy el activo");
+  const hm = hojaMov(); hm.getRange(hm.getLastRow() + 1, 1, 1, 5).setValues([[fecha, p.id, tipo, monto, String(d.nota || "")]]);
+  const nuevo = Math.max(0, p.valor + (tipo === "compra" ? monto : -monto));
+  hojaPos().getRange(p.fila, 6, 1, 2).setValues([[nuevo, hoyTxt()]]);
+  const hv = hojaVal(); hv.getRange(hv.getLastRow() + 1, 1, 1, 3).setValues([[hoyTxt(), p.id, nuevo]]);
+  return apiInversiones();
+}
+
+function invReevaluar(d) {
+  const lista = d.valores || [];
+  const pos = leerPos(), hp = hojaPos(), hv = hojaVal();
+  const nuevos = [];
+  lista.forEach(x => {
+    const p = pos.filter(q => q.id === String(x.id))[0];
+    const v = Number(x.valor);
+    if (!p) throw new Error("Activo inexistente");
+    if (!(v >= 0)) throw new Error("Valor inválido en " + p.activo);
+    hp.getRange(p.fila, 6, 1, 2).setValues([[v, hoyTxt()]]);
+    nuevos.push([hoyTxt(), p.id, v]);
+  });
+  if (nuevos.length) hv.getRange(hv.getLastRow() + 1, 1, nuevos.length, 3).setValues(nuevos);
+  return apiInversiones();
+}
+
+function invBorrarMov(d) {
+  const hm = hojaMov(), fila = Number(d.fila);
+  if (!(fila >= 2 && fila <= hm.getLastRow())) throw new Error("Movimiento inexistente");
+  const r = hm.getRange(fila, 1, 1, 5).getValues()[0];
+  const p = leerPos().filter(x => x.id === String(r[1]))[0];
+  hm.deleteRow(fila);
+  if (p) {
+    const nuevo = Math.max(0, p.valor + (r[2] === "compra" ? -Number(r[3]) : Number(r[3])));
+    hojaPos().getRange(p.fila, 6).setValue(nuevo);
+  }
+  return apiInversiones();
 }
