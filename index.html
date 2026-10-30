@@ -358,11 +358,23 @@ function ahorroRecomendado(m) {
   return { txt: `${p}% · ${money(m.ingreso * p / 100)}`, nota: `Con este mes no llegás al ${pct(0.2)}; lo máximo que podés ahorrar es ${pct(m.resultado / m.ingreso)} (${money(m.resultado)}). Recomiendo ${p}% para no quedar justo.` };
 }
 
+// Cambio de una sección contra el mes anterior: verde si baja, rojo si sube.
+function variacion(sc, prevMes) {
+  if (!prevMes) return "";
+  const ps = prevMes.secciones.find(x => x.titulo === sc.titulo);
+  const antes = ps ? ps.total : 0;
+  if (!antes) return sc.total ? `<small class="mal" style="font-weight:400">nuevo</small>` : "";
+  const d = (sc.total - antes) / Math.abs(antes);
+  if (Math.abs(d) < 0.0005) return `<small style="font-weight:400;color:var(--muted)">= 0%</small>`;
+  return `<small class="${d > 0 ? "mal" : "ok"}" style="font-weight:400">${d > 0 ? "▲" : "▼"} ${pct(Math.abs(d))}</small>`;
+}
+
 function htmlObjMes() {
   const m = objTodos[objIdx];
   const chips = objTodos.map((x, i) => `<button class="chip ${i === objIdx ? "on" : ""} ${x.estado}" onclick="selObj(${i})">${x.label}</button>`).join("");
   const estado = m.estado === "cerrado" ? "Cerrado" : m.estado === "actual" ? "En curso" : "Proyectado";
-  const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${money(sc.total)}</span></div>` +
+  const prevMes = objIdx > 0 ? objTodos[objIdx - 1] : null;
+  const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${variacion(sc, prevMes)} ${money(sc.total)}</span></div>` +
     sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}</span></div>`).join("")).join("");
   const rec = ahorroRecomendado(m);
   return `<div class="chips" id="chips">${chips}</div>
