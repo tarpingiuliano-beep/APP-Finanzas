@@ -101,17 +101,27 @@ function textoMes(v) {
   return /^\d{4}-\d{2}$/.test(String(v || "").trim()) ? String(v).trim() : "";
 }
 
+// Las cuotas restantes bajan solas con los meses. Columna J ("Restantes al", yyyy-MM) = mes en que vale el número de la columna C.
+// Si está vacía se toma BASE_RESTANTES (el último mes en que se actualizaban a mano). Las filas con "Primer pago" cuentan desde ese mes.
+const BASE_RESTANTES = "2026-10";
+
 function leerCuotas() {
   return memo("cuotas", () => {
     const datos = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CUOTAS).getDataRange().getValues();
+    const hoyKey = mesKey(new Date());
     const out = [];
     for (let i = 1; i < datos.length; i++) {
       const nombre = String(datos[i][0]).trim();
       if (nombre.toLowerCase() === "total") break;
-      const monto = Number(datos[i][1]) || 0, restantes = Number(datos[i][2]) || 0;
+      const monto = Number(datos[i][1]) || 0;
+      let restantes = Number(datos[i][2]) || 0, primer = textoMes(datos[i][5]);
       if (!nombre || monto <= 0 || restantes <= 0) continue;
-      out.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim(), primer: textoMes(datos[i][5]),
-        fila: i + 1, fondo: /^s[ií]$/i.test(String(datos[i][6] || "").trim()) });
+      const trans = difMeses(primer || textoMes(datos[i][9]) || BASE_RESTANTES, hoyKey);   // meses desde que arrancó el conteo
+      if (primer) { if (trans > 0) { restantes -= trans; primer = ""; } }
+      else if (trans > 0) restantes -= trans;
+      if (restantes <= 0) continue;
+      out.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim(), primer: primer,
+        fila: i + 1, fondo: /^s[ií]$/i.test(String(datos[i][8] || datos[i][6] || "").trim()) });
     }
     return out;
   });
@@ -303,7 +313,9 @@ function apiCargar(d) {
     hoja.getRange(fila, 1, 1, 3).setValues([[concepto, monto, n]]);
     hoja.getRange(fila, 4).setFormula('=IF(C' + fila + '=0,"PAGADA","")');
     hoja.getRange(fila, 5).setValue(tarjeta);
-    if (d.fondo) { hoja.getRange(fila, 7).setValue("Sí"); if (!hoja.getRange(1, 7).getValue()) hoja.getRange(1, 7).setValue("Fondo"); }
+    if (d.fondo) { hoja.getRange(fila, 9).setValue("Sí"); if (!hoja.getRange(1, 9).getValue()) hoja.getRange(1, 9).setValue("Fondo"); }
+    hoja.getRange(fila, 10).setNumberFormat("@").setValue(mesKey(new Date()));   // desde este mes las cuotas restantes bajan solas
+    if (!hoja.getRange(1, 10).getValue()) hoja.getRange(1, 10).setValue("Restantes al");
     // Cuota ya en curso (viene de un resumen): empieza en el mes del resumen; si es el mes actual queda en blanco ("ya corriendo")
     const primer = d.existente ? (/^\d{4}-\d{2}$/.test(String(d.primer || "")) && d.primer > mesKey(new Date()) ? d.primer : "")
                                : sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);   // primer mes en que se paga
@@ -797,6 +809,7 @@ function leerFijoFila(d) {
   return { h: h, fila: fila, mes: mes, alcance: alcance, nombre: String(r[0]), monto: r[1], desde: textoMes(r[2]), hasta: textoMes(r[3]) };
 }
 function escribirFijo(h, fila, nombre, monto, desde, hasta) {
+  if (!h.getRange(1, 4).getValue()) h.getRange(1, 4).setValue("Hasta");
   h.getRange(fila, 3, 1, 2).setNumberFormat("@");
   h.getRange(fila, 1, 1, 4).setValues([[nombre, monto, desde || "", hasta || ""]]);
 }
@@ -1223,8 +1236,9 @@ function apiFondoCuota(d) {
   if (!(fila >= 2 && fila <= h.getLastRow())) throw new Error("No encuentro esa cuota");
   const nombre = String(h.getRange(fila, 1).getValue()).trim();
   if (!nombre || nombre.toLowerCase() === "total") throw new Error("Esa fila no es una cuota");
-  h.getRange(fila, 7).setValue(d.fondo ? "Sí" : "");
-  if (!h.getRange(1, 7).getValue()) h.getRange(1, 7).setValue("Fondo");
+  if (/^s[ií]$/i.test(String(h.getRange(fila, 7).getValue()).trim())) h.getRange(fila, 7).setValue("");   // marca de la versión anterior
+  h.getRange(fila, 9).setValue(d.fondo ? "Sí" : "");
+  if (!h.getRange(1, 9).getValue()) h.getRange(1, 9).setValue("Fondo");
   MEMO = {};
   return apiDeuda();
 }
