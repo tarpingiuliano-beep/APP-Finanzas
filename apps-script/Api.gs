@@ -40,6 +40,8 @@ function doPost(e) {
     if (body.accion === "leerResumen") return respuesta({ ok: true, data: apiLeerResumen(body.datos || {}) });
     if (body.accion === "compararResumen") return respuesta({ ok: true, data: apiCompararResumen(body.datos || {}) });
     if (body.accion === "leerDetalle") return respuesta({ ok: true, data: apiLeerDetalle(body.datos || {}) });
+    if (body.accion === "fondoCuota") return respuesta({ ok: true, data: apiFondoCuota(body.datos || {}) });
+    if (body.accion === "invPlazo") return respuesta({ ok: true, data: invPlazo(body.datos || {}) });
     if (body.accion === "inversiones") return respuesta({ ok: true, data: apiInversiones() });
     if (body.accion === "invAlta") return respuesta({ ok: true, data: invAlta(body.datos || {}) });
     if (body.accion === "invMov") return respuesta({ ok: true, data: invMov(body.datos || {}) });
@@ -108,7 +110,8 @@ function leerCuotas() {
       if (nombre.toLowerCase() === "total") break;
       const monto = Number(datos[i][1]) || 0, restantes = Number(datos[i][2]) || 0;
       if (!nombre || monto <= 0 || restantes <= 0) continue;
-      out.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim(), primer: textoMes(datos[i][5]) });
+      out.push({ concepto: nombre, monto: monto, restantes: restantes, tarjeta: String(datos[i][4] || "").trim(), primer: textoMes(datos[i][5]),
+        fila: i + 1, fondo: /^s[ií]$/i.test(String(datos[i][6] || "").trim()) });
     }
     return out;
   });
@@ -149,16 +152,18 @@ function proyectar(n) {
       return f.editable ? { nombre: f.nombre, monto: f.monto, fila: f.fila } : { nombre: f.nombre, monto: f.monto };
     }) });
 
-    const porTarjeta = {}, prestamo = [], descuento = [];
+    const porTarjeta = {}, prestamo = [], descuento = [], delFondo = [];
     cuotas.forEach(c => {
       const off = c.primer ? Math.max(0, difMeses(hoyKey, c.primer)) : 0;
       if (k < off || k >= off + c.restantes) return;
       const item = { nombre: c.concepto, monto: c.monto, nota: "quedan " + (c.restantes - (k - off)) };
+      if (c.fondo) { delFondo.push(item); return; }
       if (/pr[eé]stamo/i.test(c.concepto)) { prestamo.push(item); return; }
       if (/termotanque/i.test(c.concepto)) descuento.push({ nombre: "Termotanque", monto: -c.monto });
       const t = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
       (porTarjeta[t] = porTarjeta[t] || []).push(item);
     });
+    if (delFondo.length) secciones.splice(1, 0, { titulo: "Se paga del fondo", tipo: "fondo", items: delFondo });
     if (prestamo.length) secciones.push({ titulo: "Préstamo", tipo: "cuotas", items: prestamo });
     Object.keys(porTarjeta).sort().forEach(t => secciones.push({ titulo: "Cuotas " + t, tipo: "cuotas", items: porTarjeta[t] }));
     if (descuento.length) secciones.push({ titulo: "Descuento de alquiler", tipo: "cuotas", items: descuento });
@@ -167,11 +172,11 @@ function proyectar(n) {
 
     secciones.forEach(sc => { sc.total = sc.items.reduce((a, x) => a + x.monto, 0); });
     const suma = (tipo) => secciones.filter(sc => sc.tipo === tipo).reduce((a, sc) => a + sc.total, 0);
-    const total = secciones.reduce((a, sc) => a + sc.total, 0);
+    const total = secciones.filter(sc => sc.tipo !== "fondo").reduce((a, sc) => a + sc.total, 0);   // lo que sale del fondo no resta del sueldo
     const meta = ingreso * META_AHORRO, resultado = ingreso - total;
     meses.push({
       key: key, label: MESES_ES[m0] + " " + String(anio).slice(2), labelLargo: MESES_LARGO[m0] + " " + anio, estado: k === 0 ? "actual" : "futuro",
-      ingreso: ingreso, fijos: suma("fijos"), cuotas: suma("cuotas"), unico: suma("unico"), secciones: secciones,
+      ingreso: ingreso, fijos: suma("fijos"), cuotas: suma("cuotas"), unico: suma("unico"), fondo: suma("fondo"), secciones: secciones,
       total: total, resultado: resultado, pct: ingreso ? resultado / ingreso : 0, meta: meta, vsMeta: resultado - meta
     });
   }
@@ -257,7 +262,7 @@ function apiDeuda() {
   const cuotas = leerCuotas().map(c => {
     const off = c.primer ? Math.max(0, difMeses(hoyKey, c.primer)) : 0;
     const fin = sumarMeses(hoyKey, off + c.restantes - 1);
-    return { concepto: c.concepto, monto: c.monto, restantes: c.restantes, tarjeta: c.tarjeta,
+    return { concepto: c.concepto, monto: c.monto, restantes: c.restantes, tarjeta: c.tarjeta, fila: c.fila, fondo: c.fondo,
       empieza: off > 0 ? MESES_ES[Number(c.primer.slice(5, 7)) - 1] + " " + c.primer.slice(2, 4) : "",
       termina: MESES_ES[Number(fin.slice(5, 7)) - 1] + " " + fin.slice(2, 4) };
   });
@@ -298,6 +303,7 @@ function apiCargar(d) {
     hoja.getRange(fila, 1, 1, 3).setValues([[concepto, monto, n]]);
     hoja.getRange(fila, 4).setFormula('=IF(C' + fila + '=0,"PAGADA","")');
     hoja.getRange(fila, 5).setValue(tarjeta);
+    if (d.fondo) { hoja.getRange(fila, 7).setValue("Sí"); if (!hoja.getRange(1, 7).getValue()) hoja.getRange(1, 7).setValue("Fondo"); }
     // Cuota ya en curso (viene de un resumen): empieza en el mes del resumen; si es el mes actual queda en blanco ("ya corriendo")
     const primer = d.existente ? (/^\d{4}-\d{2}$/.test(String(d.primer || "")) && d.primer > mesKey(new Date()) ? d.primer : "")
                                : sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);   // primer mes en que se paga
@@ -978,7 +984,7 @@ function recordatorioFacturacion(hoy) {
 // Hojas: "Inversiones" (A id, B cartera, C activo, D plataforma, E moneda, F valor actual, G fecha valuación),
 // "MovInv" (A fecha, B id, C tipo compra|venta, D monto, E nota), "ValInv" (A fecha, B id, C valor),
 // "Referencias" (A tipo ipc|pf, B mes yyyy-MM, C valor: ipc = variación mensual en %, pf = TNA en %).
-const CARTERAS = ["Retiro", "Prepaga", "Ahorro general"];
+const CARTERAS = ["Retiro", "Prepaga", "Ahorro general", "Fondo de cuotas"];
 
 function hojaInv(nombre, enc, textoCols) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -989,7 +995,7 @@ function hojaInv(nombre, enc, textoCols) {
   if (textoCols) h.getRange(textoCols).setNumberFormat("@");
   return h;
 }
-function hojaPos() { return hojaInv("Inversiones", ["Id", "Cartera", "Activo", "Plataforma", "Moneda", "Valor actual", "Valuado el"], "A:A"); }
+function hojaPos() { return hojaInv("Inversiones", ["Id", "Cartera", "Activo", "Plataforma", "Moneda", "Valor actual", "Valuado el", "Vence", "TNA", "Constituido"], "A:A"); }
 function hojaMov() { return hojaInv("MovInv", ["Fecha", "Id", "Tipo", "Monto", "Nota"], "A:B"); }
 function hojaVal() { return hojaInv("ValInv", ["Fecha", "Id", "Valor"], "A:B"); }
 function hojaRef() { return hojaInv("Referencias", ["Tipo", "Mes", "Valor"], "A:B"); }
@@ -999,8 +1005,9 @@ function filas(h, cols) { return h.getLastRow() > 1 ? h.getRange(2, 1, h.getLast
 function txtFecha(v) { const f = aFecha(v); return f ? fechaTxt(f) : ""; }
 
 function leerPos() {
-  return filas(hojaPos(), 7).map((r, i) => ({ fila: i + 2, id: String(r[0]), cartera: String(r[1]), activo: String(r[2]),
-    plataforma: String(r[3]), moneda: String(r[4]) || "ARS", valor: Number(r[5]) || 0, valuado: txtFecha(r[6]) })).filter(p => p.id);
+  return filas(hojaPos(), 10).map((r, i) => ({ fila: i + 2, id: String(r[0]), cartera: String(r[1]), activo: String(r[2]),
+    plataforma: String(r[3]), moneda: String(r[4]) || "ARS", valor: Number(r[5]) || 0, valuado: txtFecha(r[6]),
+    vence: txtFecha(r[7]), tna: Number(r[8]) || 0, constituido: txtFecha(r[9]) })).filter(p => p.id);
 }
 function leerMov() {
   return filas(hojaMov(), 5).map((r, i) => ({ fila: i + 2, fecha: txtFecha(r[0]), id: String(r[1]), tipo: String(r[2]),
@@ -1137,7 +1144,7 @@ function apiInversiones() {
   const total = carteras.reduce((a, c) => a + c.totalArs, 0);
   const plataformas = {};
   activos.forEach(a => { plataformas[a.plataforma || "—"] = (plataformas[a.plataforma || "—"] || 0) + (a.moneda === "USD" ? a.valor * usd : a.valor); });
-  return { hoy, usd, total, carteras, activos, plataformas };
+  return { hoy, usd, total, carteras, activos, plataformas, fondo: resumenFondo(activos) };
 }
 
 function invAlta(d) {
@@ -1152,7 +1159,13 @@ function invAlta(d) {
   if (fecha > hoyTxt()) throw new Error("La fecha no puede ser futura");
   const id = "A" + Utilities.formatDate(new Date(), "America/Argentina/Buenos_Aires", "yyMMddHHmmss") + Math.floor(Math.random() * 9000 + 1000);
   const hp = hojaPos();
-  hp.getRange(hp.getLastRow() + 1, 1, 1, 7).setValues([[id, cartera, activo, String(d.plataforma || "").trim(), moneda, valor, hoyTxt()]]);
+  const fp = hp.getLastRow() + 1;
+  hp.getRange(fp, 1, 1, 7).setValues([[id, cartera, activo, String(d.plataforma || "").trim(), moneda, valor, hoyTxt()]]);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(d.vence || "")) && Number(d.tna) > 0) {
+    hp.getRange(1, 8, 1, 3).setValues([["Vence", "TNA", "Constituido"]]);
+    hp.getRange(fp, 8, 1, 3).setNumberFormat("@");
+    hp.getRange(fp, 8, 1, 3).setValues([[d.vence, Number(d.tna), fecha]]);
+  }
   if (aportado > 0) { const hm = hojaMov(); hm.getRange(hm.getLastRow() + 1, 1, 1, 5).setValues([[fecha, id, "compra", aportado, "Alta"]]); }
   const hv = hojaVal(); hv.getRange(hv.getLastRow() + 1, 1, 1, 3).setValues([[hoyTxt(), id, valor]]);
   return apiInversiones();
@@ -1201,4 +1214,61 @@ function invBorrarMov(d) {
     hojaPos().getRange(p.fila, 6).setValue(nuevo);
   }
   return apiInversiones();
+}
+
+
+// ==== Fondo para cuotas ====
+function apiFondoCuota(d) {
+  const h = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CUOTAS), fila = Number(d.fila);
+  if (!(fila >= 2 && fila <= h.getLastRow())) throw new Error("No encuentro esa cuota");
+  const nombre = String(h.getRange(fila, 1).getValue()).trim();
+  if (!nombre || nombre.toLowerCase() === "total") throw new Error("Esa fila no es una cuota");
+  h.getRange(fila, 7).setValue(d.fondo ? "Sí" : "");
+  if (!h.getRange(1, 7).getValue()) h.getRange(1, 7).setValue("Fondo");
+  MEMO = {};
+  return apiDeuda();
+}
+
+function invPlazo(d) {
+  const p = leerPos().filter(x => x.id === String(d.id))[0];
+  if (!p) throw new Error("No encuentro ese activo");
+  const vence = String(d.vence || ""), tna = Number(d.tna);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(vence)) throw new Error("Falta la fecha de vencimiento");
+  if (!(tna > 0 && tna < 500)) throw new Error("La tasa (TNA) no es válida");
+  const hp = hojaPos();
+  hp.getRange(1, 8, 1, 3).setValues([["Vence", "TNA", "Constituido"]]);
+  hp.getRange(p.fila, 8, 1, 3).setNumberFormat("@");
+  hp.getRange(p.fila, 8, 1, 3).setValues([[vence, tna, /^\d{4}-\d{2}-\d{2}$/.test(String(d.constituido || "")) ? d.constituido : hoyTxt()]]);
+  if (d.valor !== undefined && d.valor !== null && d.valor !== "") {
+    const v = Number(d.valor);
+    if (!(v >= 0)) throw new Error("Valor inválido");
+    hp.getRange(p.fila, 6, 1, 2).setValues([[v, hoyTxt()]]);
+    const hv = hojaVal(); hv.getRange(hv.getLastRow() + 1, 1, 1, 3).setValues([[hoyTxt(), p.id, v]]);
+  }
+  return apiInversiones();
+}
+
+// Resumen del fondo: cuánto cubre cada mes, hasta cuándo alcanza y qué hacer cuando vence el plazo fijo.
+function resumenFondo(activos) {
+  const propios = activos.filter(a => a.cartera === "Fondo de cuotas" && a.moneda === "ARS");
+  const saldo = propios.reduce((a, x) => a + x.valor, 0);
+  const meses = proyectar(12).map(m => ({ key: m.key, label: m.label, total: m.fondo || 0 }));
+  let bal = saldo, alcanza = "", falta = 0;
+  for (let i = 0; i < meses.length; i++) {
+    if (meses[i].total <= 0) continue;
+    if (bal + 0.005 < meses[i].total) { alcanza = i === 0 ? "ni este mes" : meses[i - 1].label; falta = meses[i].total - bal; break; }
+    bal -= meses[i].total;
+  }
+  if (!alcanza && meses.some(m => m.total > 0)) alcanza = "todo el período (12 meses)";
+  let plazo = null;
+  const conVto = propios.filter(a => a.vence).sort((a, b) => a.vence.localeCompare(b.vence))[0];
+  if (conVto) {
+    const dias = Math.round((aFecha(conVto.vence) - aFecha(conVto.constituido || conVto.desde || hoyTxt())) / 86400000);
+    const alVence = conVto.valor * (1 + conVto.tna / 100 * Math.max(0, dias) / 365);
+    const dv = aFecha(conVto.vence), proximo = dv.getDate() <= 20 ? mesKey(dv) : sumarMeses(mesKey(dv), 1);   // cuotas que se pagan después de cobrar el plazo fijo
+    const cuotasProx = (meses.filter(m => m.key === proximo)[0] || { total: 0 }).total;
+    plazo = { id: conVto.id, activo: conVto.activo, vence: conVto.vence, tna: conVto.tna, diasRest: Math.round((aFecha(conVto.vence) - aFecha(hoyTxt())) / 86400000),
+      capital: conVto.valor, alVence: alVence, mesProx: proximo, cuotasProx: cuotasProx, renovar: Math.max(0, alVence - cuotasProx) };
+  }
+  return { saldo: saldo, meses: meses.filter(m => m.total > 0).slice(0, 12), alcanza: alcanza, falta: falta, plazo: plazo };
 }

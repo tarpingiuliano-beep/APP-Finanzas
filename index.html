@@ -384,7 +384,9 @@ function htmlObjMes() {
   const chips = objTodos.map((x, i) => `<button class="chip ${i === objIdx ? "on" : ""} ${x.estado}" onclick="selObj(${i})">${x.label}</button>`).join("");
   const estado = m.estado === "cerrado" ? "Cerrado" : m.estado === "actual" ? "En curso" : "Proyectado";
   const prevMes = objIdx > 0 ? objTodos[objIdx - 1] : null;
-  const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${variacion(sc, prevMes)} ${money(sc.total)}</span></div>` +
+  const sec = m.secciones.map(sc => (sc.tipo === "fondo"
+    ? `<div class="sec"><span>${esc(sc.titulo)}</span><span style="color:var(--muted)">${money(sc.total)} <small style="font-weight:400">no resta</small></span></div>`
+    : `<div class="sec"><span>${esc(sc.titulo)}</span><span>${variacion(sc, prevMes)} ${money(sc.total)}</span></div>`) +
     sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}${it.fila && m.estado !== "cerrado" ? ` <button class="lapiz" onclick="fijoEditar(${it.fila})" aria-label="Editar">✎</button>` : ""}</span></div>`).join("")).join("");
   const rec = ahorroRecomendado(m);
   return `<div class="chips" id="chips">${chips}</div>
@@ -426,7 +428,7 @@ function htmlDeuda(d) {
   const grupos = {};
   d.cuotas.forEach(c => { const t = c.tarjeta || "Sin tarjeta"; (grupos[t] = grupos[t] || []).push(c); });
   const lista = Object.keys(grupos).sort().map(t => `<div class="sec"><span>${esc(t)}</span><span>${money(grupos[t].reduce((a, c) => a + c.monto, 0))} / mes</span></div>` +
-    grupos[t].map(c => `<div class="sub"><span>${esc(c.concepto)} <small>· quedan ${c.restantes}${c.empieza ? ", empieza en " + c.empieza : ""}, termina en ${c.termina}</small></span><span>${money(c.monto)}</span></div>`).join("")).join("") || `<div class="vacio">Sin cuotas</div>`;
+    grupos[t].map(c => `<div class="sub"><span>${esc(c.concepto)} <small>· quedan ${c.restantes}${c.empieza ? ", empieza en " + c.empieza : ""}, termina en ${c.termina}</small>${c.fondo ? ` <span class="tag">del fondo</span>` : ""}</span><span>${money(c.monto)} <button class="lapiz" style="width:auto;padding:0 8px;font-size:11px" onclick="fondoCuota(${c.fila}, ${c.fondo ? "false" : "true"})">${c.fondo ? "Quitar del fondo" : "Al fondo"}</button></span></div>`).join("")).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
     <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>
     ${htmlResumen()}
@@ -454,6 +456,7 @@ function htmlCargar() {
       ${fac ? `<div class="campo"><label>Vencimiento</label><input id="cVto" type="date" onchange="previa()"></div>`
             : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
     </div>
+    ${cuotas ? `<label class="tilde"><input type="checkbox" id="cFondo"><span>Se paga del fondo<small>La cuota se muestra pero no resta de tu sueldo: sale del fondo para cuotas.</small></span></label>` : ""}
     ${fac ? "" : `<label class="tilde"><input type="checkbox" id="cSig" onchange="previa()"><span>Siguiente resumen<small>Marcalo si el consumo fue después del cierre de la tarjeta: se empieza a pagar un mes más tarde.</small></span></label>`}
     <div class="nota" id="cNota"></div>
     <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>
@@ -492,7 +495,7 @@ async function enviarCarga() {
   const nota = $("cNota"), btn = $("cBtn"), fac = tipoCarga === "factura";
   const datos = { tipo: tipoCarga, concepto: $("cConcepto").value.trim(), monto: leerMonto($("cMonto").value),
     tarjeta: $("cTarjeta") ? $("cTarjeta").value : "", cuotas: $("cCuotas") ? Number($("cCuotas").value) : 1,
-    vencimiento: $("cVto") ? $("cVto").value : "", siguiente: $("cSig") ? $("cSig").checked : false };
+    vencimiento: $("cVto") ? $("cVto").value : "", siguiente: $("cSig") ? $("cSig").checked : false, fondo: $("cFondo") ? $("cFondo").checked : false };
   const falta = !datos.concepto || !(datos.monto > 0) || (tipoCarga === "cuotas" && !(datos.cuotas >= 2)) || (fac && !datos.vencimiento);
   if (falta) { nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return; }
   btn.disabled = true; nota.className = "nota"; nota.textContent = "Guardando…";
@@ -780,6 +783,7 @@ function htmlInvCartera(nombre) {
     <div class="nav-mes"><button class="mini" onclick="invIr('main')">‹ Volver</button><b>${esc(nombre)}</b><span style="width:70px"></span></div>
     <div class="big pos"><small>Total de la cartera</small><b>${money(c.totalArs)}</b></div>
     ${bloques || `<div class="vacio">Esta cartera todavía no tiene activos</div>`}
+    ${nombre === "Fondo de cuotas" ? htmlFondoResumen() : ""}
     <h2>Activos</h2>${lista || `<div class="vacio">Sumá el primero</div>`}
     <div style="display:flex;gap:8px;margin-top:6px"><button class="btn" onclick="invIr('alta',{nombre:'${nombre}'})">+ Sumar activo</button>
     ${acts.length ? `<button class="btn btn2" style="margin-top:0" onclick="invIr('reeval',{nombre:'${nombre}'})">Reevaluar</button>` : ""}</div>`;
@@ -855,13 +859,15 @@ function htmlInvAlta(nombre) {
   return `
     <div class="nav-mes"><button class="mini" onclick="invIr('${nombre ? "cartera" : "main"}',{nombre:'${nombre}'})">‹ Volver</button><b>Sumar activo</b><span style="width:70px"></span></div>
     <div class="card">
-      <div class="campo"><label>Cartera</label><select id="aCartera">${["Retiro", "Prepaga", "Ahorro general"].map(c => `<option ${c === nombre ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="campo"><label>Cartera</label><select id="aCartera">${["Retiro", "Prepaga", "Ahorro general", "Fondo de cuotas"].map(c => `<option ${c === nombre ? "selected" : ""}>${c}</option>`).join("")}</select></div>
       <div class="campo"><label>Activo</label><input id="aActivo" type="text" autocomplete="off" placeholder="Ej: MELI (CEDEAR)"></div>
       <div class="campo"><label>Plataforma</label><input id="aPlat" type="text" list="plats" autocomplete="off" placeholder="IOL, Wallbit…"><datalist id="plats">${plats.map(p => `<option value="${p}">`).join("")}</datalist></div>
       <div class="campo"><label>Moneda</label><select id="aMoneda"><option>ARS</option><option>USD</option></select></div>
       <div class="campo"><label>Valor actual</label><input id="aValor" type="text" inputmode="decimal" autocomplete="off" placeholder="0"></div>
       <div class="campo"><label>Cuánto pusiste en total (si lo dejás vacío, es igual al valor actual)</label><input id="aAport" type="text" inputmode="decimal" autocomplete="off" placeholder="Opcional"></div>
       <div class="campo"><label>Fecha de la compra (la primera, si hubo varias)</label><input id="aFecha" type="date" value="${hoyIso()}"></div>
+      <div class="nota" style="margin:0 0 6px">Solo si es un plazo fijo (para que te avise cuánto renovar):</div>
+      <div class="fila"><div class="campo"><label>Vence</label><input id="aVence" type="date"></div><div class="campo"><label>TNA %</label><input id="aTna" type="text" inputmode="decimal" placeholder="Ej: 24"></div></div>
     </div>
     <button class="btn" id="aBtn" onclick="invGuardarAlta()">Guardar activo</button>`;
 }
@@ -870,7 +876,7 @@ async function invGuardarAlta() {
   if (!$("aActivo").value.trim()) { alert("Falta el nombre del activo"); return; }
   if (!(valor >= 0)) { alert("Poné el valor actual"); return; }
   const datos = { cartera: $("aCartera").value, activo: $("aActivo").value, plataforma: $("aPlat").value, moneda: $("aMoneda").value,
-    valor, aportado: t ? leerMonto(t) : "", fecha: $("aFecha").value };
+    valor, aportado: t ? leerMonto(t) : "", fecha: $("aFecha").value, vence: $("aVence").value, tna: leerMonto($("aTna").value) || 0 };
   if (await invAccion("invAlta", datos, $("aBtn"))) invIr("cartera", { nombre: datos.cartera });
 }
 
@@ -1014,8 +1020,9 @@ function htmlResCmp() {
     <div class="row"><span>Total del resumen</span><span>${money2(c.total)}</span></div>
     <div class="row"><span>${c.cuadra ? "✔ Cuadra" : "⚠ Diferencia"}</span><span class="${c.cuadra ? "ok" : "mal"}">${c.cuadra ? "" : (c.diferencia > 0 ? "falta " : "sobra ") + money2(Math.abs(c.diferencia))}</span></div>
     ${c.cuadra ? "" : `<div class="nota">${c.diferencia > 0 ? "Hay consumos en el resumen que no tenés cargados." : "Tenés cargado algo que no figura en este resumen."} Subí la captura del detalle de cuotas y consumos para encontrar cuál es.</div>
-      <label class="btn btn2" for="rfDet" style="margin-top:6px">Subir detalle de cuotas</label><input type="file" id="rfDet" accept="image/*" class="hidden" onchange="resDetalle(this)">`}
-    <div id="resDet"></div>
+      <label class="btn btn2" for="rfDet" style="margin-top:6px">Subir detalle de cuotas</label><input type="file" id="rfDet" accept="image/*" class="hidden" onchange="resDetalle(this)">
+      ${c.diferencia > 0 ? `<button class="btn btn2" style="margin-top:6px" onclick="resAjustar()">Ajustar a mano (${money2(c.diferencia)})</button>` : ""}`}
+    <div id="resAdj"></div><div id="resDet"></div>
     <button class="btn btn2" id="rAg" onclick="resAgendar()">Agendar vencimiento (${fechaLarga(c.vencimiento)})</button>
   </div>`;
 }
@@ -1059,6 +1066,71 @@ async function resAgregar(i) {
     resCmp = await api("compararResumen", resDat);
     const ya = $("resDet").innerHTML; $("resCmp").innerHTML = htmlResCmp(); $("resDet").innerHTML = ya;
   } catch (e) { alert(e.message); btn.disabled = false; }
+}
+
+
+async function fondoCuota(fila, fondo) {
+  try { const d = await api("fondoCuota", { fila, fondo }); cache.deuda = d; $("vista").innerHTML = htmlDeuda(d); }
+  catch (e) { alert(e.message); }
+}
+
+// ---- Ajustar el resumen con lo que falta (sin captura del detalle) ----
+function resAjustar() {
+  const c = resCmp, dif = c.diferencia > 0 ? c.diferencia : 0;
+  $("resAdj").innerHTML = `<div class="item" style="margin-top:8px">
+    <div class="campo"><label>Concepto</label><input id="adC" type="text" value="Consumo sin cargar"></div>
+    <div class="fila"><div class="campo"><label>Monto de cada cuota</label><input id="adM" type="text" inputmode="decimal" value="${dif}"></div>
+    <div class="campo"><label>Cuotas que faltan (1 = un pago)</label><input id="adN" type="number" min="1" max="36" value="1"></div></div>
+    <div class="nota">Se suma a ${esc(c.tarjeta)} desde ${mesNombre(c.mesKey)} y la comparación se recalcula.</div>
+    <div class="acc"><button class="descartar" onclick="$('resAdj').innerHTML=''">Cancelar</button><button class="guardar" id="adG" onclick="resAjustarGuardar()">Ajustar</button></div></div>`;
+}
+async function resAjustarGuardar() {
+  const c = resCmp, concepto = $("adC").value.trim(), monto = leerMonto($("adM").value), n = Number($("adN").value) || 1;
+  if (!concepto || !(monto > 0)) { alert("Revisá el concepto y el monto"); return; }
+  $("adG").disabled = true;
+  try {
+    await api("cargar", n > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: c.tarjeta, primer: c.mesKey }
+                              : { tipo: "unico", concepto, monto, tarjeta: c.tarjeta, pago: c.mesKey });
+    const det = $("resDet").innerHTML;
+    resCmp = await api("compararResumen", resDat);
+    $("resCmp").innerHTML = htmlResCmp(); $("resDet").innerHTML = det;
+  } catch (e) { alert(e.message); $("adG").disabled = false; }
+}
+
+// ---- Inversión: fondo para cuotas ----
+function htmlFondoResumen() {
+  const f = invData.fondo;
+  if (!f) return "";
+  const meses = f.meses.slice(0, 6).map(m => `<div class="row"><span>${m.label}</span><span>${money(m.total)}</span></div>`).join("");
+  const p = f.plazo;
+  const plazo = p ? `<h2>Plazo fijo del fondo</h2><div class="card">
+      <div class="row"><span>${esc(p.activo)}</span><span>vence el ${fechaLarga(p.vence)} <small>(${p.diasRest >= 0 ? "en " + p.diasRest + " días" : "vencido"})</small></span></div>
+      <div class="row"><span>Tasa</span><span>${String(p.tna).replace(".", ",")}% TNA</span></div>
+      <div class="row"><span>Capital → al vencimiento</span><span>${money(p.capital)} → <b>${money(p.alVence)}</b></span></div>
+      <div class="row"><span>Cuotas que cubre (${p.mesProx})</span><span>${money(p.cuotasProx)}</span></div>
+      <div class="row"><span><b>Al vencer: retirá ${money(Math.min(p.cuotasProx, p.alVence))} y renová</b></span><span><b>${money(p.renovar)}</b></span></div>
+      <button class="btn btn2" onclick="invRenovarForm('${p.id}')">Renové el plazo fijo</button><div id="invRen"></div></div>` : "";
+  return `<h2>Fondo para cuotas</h2><div class="card">
+      <div class="row"><span>Saldo del fondo</span><span><b>${money(f.saldo)}</b></span></div>
+      ${meses ? meses : `<div class="vacio">Todavía no marcaste cuotas "del fondo" (Deuda → Al fondo, o al cargarlas).</div>`}
+      ${f.alcanza ? `<div class="row"><span>Te alcanza hasta</span><span class="${f.falta > 0 ? "mal" : "ok"}">${f.alcanza}</span></div>` : ""}
+      ${f.falta > 0 ? `<div class="nota" style="margin:6px 0 0">Después de eso faltarían ${money(f.falta)}. No cuenta intereses, así que es una estimación prudente.</div>` : ""}
+    </div>${plazo}`;
+}
+function invRenovarForm(id) {
+  const p = invData.fondo.plazo, sug = Math.round(p.renovar);
+  const d = new Date(); d.setDate(d.getDate() + 30);
+  const iso = d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+  $("invRen").innerHTML = `<div class="ask">
+    <div class="campo"><label>Nuevo capital a renovar</label><input id="rnC" type="text" inputmode="decimal" value="${sug}"></div>
+    <div class="campo"><label>Nuevo vencimiento</label><input id="rnV" type="date" value="${iso}"></div>
+    <div class="campo"><label>Tasa (TNA %)</label><input id="rnT" type="text" inputmode="decimal" value="${p.tna}"></div>
+    <div class="acc"><button class="p" id="rnG" onclick="invRenovar('${id}')">Guardar renovación</button><button onclick="$('invRen').innerHTML=''">Cancelar</button></div></div>`;
+}
+async function invRenovar(id) {
+  const datos = { id, valor: leerMonto($("rnC").value), vence: $("rnV").value, tna: leerMonto($("rnT").value), constituido: hoyIso() };
+  if (!(datos.valor >= 0) || !datos.vence || !(datos.tna > 0)) { alert("Revisá capital, vencimiento y tasa"); return; }
+  if (await invAccion("invPlazo", datos, $("rnG"))) invIr("cartera", { nombre: "Fondo de cuotas" });
 }
 
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => cargar(b.dataset.v).catch(e => mostrarLogin(e.message))));
