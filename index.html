@@ -56,7 +56,7 @@
   .login button { width: 100%; padding: 13px; font-size: 16px; border: 0; border-radius: 12px;
     background: var(--blue); color: var(--text); font-family: inherit; }
   .err { color: var(--bad); font-size: 14px; min-height: 20px; margin-top: 10px; }
-  .hidden { display: none; }
+  .hidden { display: none !important; }
   .top { display: flex; justify-content: space-between; align-items: center; }
   .top button { border: 0; background: none; color: var(--muted); font-size: 13px; font-family: inherit; }
   .seg { display: flex; background: var(--sand); border-radius: 12px; padding: 4px; margin-bottom: 14px; }
@@ -124,6 +124,7 @@
     <input type="password" id="clave" name="password" placeholder="Contraseña" autocomplete="current-password" required>
     <button type="submit">Entrar</button>
   </form>
+  <button type="button" id="bioEntrar" class="btn btn2 hidden" onclick="bioDesbloquear(true)">Entrar con huella</button>
   <div class="err" id="err"></div>
 </div>
 
@@ -192,7 +193,7 @@ async function entrar(c) {
     guardar(c);
     $("login").classList.add("hidden");
     $("app").classList.remove("hidden"); $("nav").classList.remove("hidden");
-  } catch (e) { clave = null; mostrarLogin(e.message); }
+  } catch (e) { clave = null; if (/contraseña/i.test(e.message)) bioQuitar(); mostrarLogin(e.message); }
 }
 
 async function cargar(v) {
@@ -229,7 +230,7 @@ function htmlInicio(d) {
     ${recordatorios(d)}
     <h2>Próximos vencimientos</h2>
     <div class="card">${venc}</div>
-    ${htmlPush()}`;
+    ${htmlPush()}${htmlBio()}`;
 }
 
 function editarFac(i) {
@@ -686,7 +687,7 @@ function imprimirHoras() {
 }
 
 $("formLogin").addEventListener("submit", (e) => { e.preventDefault(); entrar($("clave").value); });
-$("salir").addEventListener("click", () => { try { sessionStorage.removeItem("k"); } catch (e) {} clave = null; mostrarLogin(); });
+$("salir").addEventListener("click", () => { try { sessionStorage.removeItem("k"); } catch (e) {} clave = null; mostrarLogin(); bioMostrarBoton(); });
 
 // ==== Inversión ====
 let invData = null, invNav = { v: "main" };
@@ -864,11 +865,54 @@ async function invGuardarAlta() {
   if (await invAccion("invAlta", datos, $("aBtn"))) invIr("cartera", { nombre: datos.cartera });
 }
 
+
+// ==== Desbloqueo con huella (WebAuthn, solo en este teléfono) ====
+const bioSoportado = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+const b64 = (buf) => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+const deB64 = (t) => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+const bioGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+function bioActivo() { return !!(bioGet("bioId") && bioGet("bioClave")); }
+function bioQuitar() { try { localStorage.removeItem("bioId"); localStorage.removeItem("bioClave"); } catch (e) {} }
+
+function htmlBio() {
+  if (!bioSoportado()) return "";
+  return `<h2>Acceso con huella</h2><div class="card">
+    <div class="row"><span>${bioActivo() ? "Activado en este teléfono" : "Entrá sin escribir la contraseña"}</span>
+    <button class="mini" onclick="${bioActivo() ? "bioDesactivar()" : "bioActivar()"}">${bioActivo() ? "Desactivar" : "Activar"}</button></div>
+    <div class="nota" style="margin:6px 0 0">Guarda la contraseña en este teléfono y la libera con tu huella o el bloqueo del teléfono. Si alguien más tiene huellas registradas en este teléfono, también podrá entrar.</div></div>`;
+}
+async function bioActivar() {
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "Finanzas" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "finanzas", displayName: "Finanzas" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "discouraged" },
+      timeout: 60000 } });
+    localStorage.setItem("bioId", b64(cred.rawId));
+    localStorage.setItem("bioClave", clave);
+    $("vista").innerHTML = htmlInicio(cache.inicio);
+  } catch (e) { alert("No se pudo activar la huella: " + (e && e.message ? e.message : e)); }
+}
+function bioDesactivar() { bioQuitar(); $("vista").innerHTML = htmlInicio(cache.inicio); }
+function bioMostrarBoton() { $("bioEntrar").classList.toggle("hidden", !(bioSoportado() && bioActivo())); }
+async function bioDesbloquear() {
+  try {
+    await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: "public-key", id: deB64(bioGet("bioId")), transports: ["internal"] }],
+      userVerification: "required", timeout: 60000 } });
+  } catch (e) { return; }
+  entrar(bioGet("bioClave"));
+}
+
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => cargar(b.dataset.v).catch(e => mostrarLogin(e.message))));
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 const k = leer();
-if (k) entrar(k); else mostrarLogin();
+if (k) entrar(k);
+else { mostrarLogin(); bioMostrarBoton(); if (bioSoportado() && bioActivo()) bioDesbloquear(); }
 </script>
 </body>
 </html>
