@@ -217,7 +217,7 @@ async function cargar(v) {
 }
 
 function htmlInicio(d) {
-  const ahorro = d.ingreso * 0.2, disp = d.resultado - ahorro;
+  const ah = ahorroDe(d.ingreso, d.resultado), ahorro = ah.monto, disp = d.resultado - ahorro;
   const venc = d.vencimientos.length ? d.vencimientos.map((v, i) => {
     const cuando = v.dias === 0 ? "hoy" : v.dias === 1 ? "mañana" : "en " + v.dias + " días";
     return `<div id="vf${i}"><div class="venc"><div>${esc(v.concepto)}<small>${v.fecha}</small></div>
@@ -231,7 +231,7 @@ function htmlInicio(d) {
       <div class="row"><span>Fijos</span><span>${money(d.fijos)}</span></div>
       <div class="row"><span>Cuotas</span><span>${money(d.cuotas)}</span></div>
       <div class="row"><span>Pago único</span><span>${money(d.pagoUnico)}</span></div>
-      <div class="row"><span>Ahorro (${pct(0.2)})</span><span>${money(ahorro)}</span></div>
+      <div class="row"><span>Ahorro recomendado (${ah.p}%)</span><span>${money(ahorro)}</span></div>
     </div>
     <div class="nota">Es lo que pagás este mes. Lo que cargues ahora entra desde el mes que viene (o el siguiente, si marcás "siguiente resumen").</div>
     ${recordatorios(d)}
@@ -358,6 +358,15 @@ function htmlObjetivo(d) {
     <h2>Mes por mes</h2>
     <div id="objMes">${htmlObjMes()}</div>
     <div class="vacio" style="text-align:left">Proyección con lo ya comprometido (fijos, cuotas y consumos cargados). No incluye gastos que todavía no cargaste. Cada mes se congela al terminar.</div>`;
+}
+
+// Ahorro del mes: el 20% si se llega; si no, el porcentaje entero más alto que alcanza con lo que queda del ingreso.
+function ahorroDe(ingreso, resultado) {
+  if (!ingreso || resultado <= 0) return { p: 0, monto: 0 };
+  const meta = ingreso * 0.2;
+  if (resultado >= meta) return { p: 20, monto: meta };
+  const p = Math.max(0, Math.floor(resultado / ingreso * 100));
+  return { p, monto: ingreso * p / 100 };
 }
 
 // Porcentaje de ahorro que sí se puede sostener: lo que queda del ingreso, redondeado hacia abajo, hasta el 20%.
