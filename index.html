@@ -18,7 +18,7 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, "Segoe UI", Roboto, sans-serif; line-height: 1.4; }
-  .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 96px; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 80px; }
   h1 { font-size: 20px; font-weight: 600; margin: 4px 0 18px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
     padding: 16px 18px; margin-bottom: 14px; }
@@ -47,8 +47,9 @@
   .mes span:last-child { text-align: right; }
   nav { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card);
     border-top: 1px solid var(--line); display: flex; padding-bottom: env(safe-area-inset-bottom); }
-  nav button { flex: 1; border: 0; background: none; padding: 14px 0; font-size: 14px;
-    color: var(--muted); font-family: inherit; }
+  nav button { flex: 1; border: 0; background: none; padding: 7px 0 6px; font-size: 10.5px; display: flex; flex-direction: column;
+    align-items: center; gap: 2px; color: var(--muted); font-family: inherit; }
+  nav button svg { width: 21px; height: 21px; }
   nav button.on { color: var(--text); font-weight: 600; background: var(--sand); }
   .login { max-width: 340px; margin: 18vh auto 0; padding: 0 20px; text-align: center; }
   .login input { width: 100%; padding: 13px 14px; font-size: 16px; border: 1px solid var(--line);
@@ -98,6 +99,12 @@
   .sec { display: flex; justify-content: space-between; font-weight: 600; font-size: 14px; padding: 12px 0 2px; border-top: 1px solid var(--line); margin-top: 6px; }
   .sub { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); padding: 2px 0 2px 12px; }
   .sub span:first-child { min-width: 0; }
+  .lapiz { border: 0; background: var(--sand); border-radius: 8px; width: 28px; height: 24px; font-size: 14px; margin-left: 4px; color: var(--text); }
+  .ask { background: var(--bg); border-radius: 12px; padding: 12px; margin: 8px 0; }
+  .ask .campo input { width: 100%; }
+  .ask .acc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .ask .acc button { flex: 1 1 40%; padding: 10px; border: 0; border-radius: 10px; font-size: 14px; font-family: inherit; background: var(--sand); color: var(--text); }
+  .ask .acc .p { background: var(--green); } .ask .acc .x { background: var(--rose); }
   .tag { font-size: 11px; background: var(--sand); border-radius: 999px; padding: 2px 8px; margin-left: 6px; color: var(--muted); }
   .tilde { display: flex; gap: 10px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; font-size: 15px; }
   .tilde input { width: 22px; height: 22px; margin-top: 1px; flex: none; }
@@ -134,12 +141,12 @@
 </div>
 
 <nav id="nav" class="hidden">
-  <button data-v="inicio" class="on">Inicio</button>
-  <button data-v="deuda">Deuda</button>
-  <button data-v="objetivo">Objetivo</button>
-  <button data-v="horas">Horas</button>
-  <button data-v="inversion">Inversión</button>
-  <button data-v="cargar">Cargar</button>
+  <button data-v="inicio" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Inicio</span></button>
+  <button data-v="deuda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg><span>Deuda</span></button>
+  <button data-v="objetivo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg><span>Objetivo</span></button>
+  <button data-v="horas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Horas</span></button>
+  <button data-v="inversion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg><span>Inversión</span></button>
+  <button data-v="cargar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg><span>Cargar</span></button>
 </nav>
 
 <div id="impresion"></div>
@@ -378,7 +385,7 @@ function htmlObjMes() {
   const estado = m.estado === "cerrado" ? "Cerrado" : m.estado === "actual" ? "En curso" : "Proyectado";
   const prevMes = objIdx > 0 ? objTodos[objIdx - 1] : null;
   const sec = m.secciones.map(sc => `<div class="sec"><span>${esc(sc.titulo)}</span><span>${variacion(sc, prevMes)} ${money(sc.total)}</span></div>` +
-    sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}</span></div>`).join("")).join("");
+    sc.items.map(it => `<div class="sub"><span>${esc(it.nombre)}${it.nota ? ` <small>· ${esc(it.nota)}</small>` : ""}</span><span>${money(it.monto)}${it.fila && m.estado !== "cerrado" ? ` <button class="lapiz" onclick="fijoEditar(${it.fila})" aria-label="Editar">✎</button>` : ""}</span></div>`).join("")).join("");
   const rec = ahorroRecomendado(m);
   return `<div class="chips" id="chips">${chips}</div>
     <div class="card" id="objCard" ontouchstart="tocarObj(event)" ontouchend="tocarObj(event)">
@@ -386,6 +393,7 @@ function htmlObjMes() {
         <b>${m.labelLargo}<span class="tag">${estado}</span></b>
         <button class="mini" onclick="selObj(${objIdx + 1})" ${objIdx >= objTodos.length - 1 ? "disabled" : ""}>›</button></div>
       <div class="row"><span><b>Ingreso</b> <small>(facturado el mes anterior)</small></span><span><b>${money(m.ingreso)}</b></span></div>
+      ${fijoEd && fijoEd.mes === m.key ? htmlFijoForm() : ""}
       ${sec}
       <div class="sec"><span>Total a pagar</span><span>${money(m.total)}</span></div>
       <div class="sec"><span>Te queda</span><span style="color:${m.resultado >= 0 ? "var(--ok)" : "var(--bad)"}">${money(m.resultado)}</span></div>
@@ -421,6 +429,7 @@ function htmlDeuda(d) {
     grupos[t].map(c => `<div class="sub"><span>${esc(c.concepto)} <small>· quedan ${c.restantes}${c.empieza ? ", empieza en " + c.empieza : ""}, termina en ${c.termina}</small></span><span>${money(c.monto)}</span></div>`).join("")).join("") || `<div class="vacio">Sin cuotas</div>`;
   return `
     <div class="big" style="background:var(--sand)"><small>Deuda total en cuotas</small><b>${money(d.total)}</b></div>
+    ${htmlResumen()}
     <h2>Compromisos mensuales</h2>
     <div class="card">${filas}<div class="vacio" style="text-align:left;padding-bottom:0">Cuotas, préstamo y consumos de un pago. No incluye fijos ni el descuento de alquiler.</div></div>
     <h2>Tus cuotas</h2>
@@ -905,6 +914,151 @@ async function bioDesbloquear() {
       userVerification: "required", timeout: 60000 } });
   } catch (e) { return; }
   entrar(bioGet("bioClave"));
+}
+
+
+// ==== Editar / eliminar fijos (desde Objetivo) ====
+let fijoEd = null;
+const mesNombre = (key) => MESES_N[Number(key.slice(5, 7)) - 1] + " " + key.slice(0, 4);
+const MESES_N = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+function fijoEditar(fila) {
+  const m = objTodos[objIdx];
+  const it = m.secciones.filter(sc => sc.tipo === "fijos")[0].items.find(x => x.fila === fila);
+  fijoEd = { fila, mes: m.key, nombre: it.nombre, monto: it.monto, paso: "form", accion: "" };
+  $("objMes").innerHTML = htmlObjMes();
+  $("fijoForm").scrollIntoView({ block: "center" });
+}
+function htmlFijoForm() {
+  const f = fijoEd, mes = mesNombre(f.mes);
+  if (f.paso === "alcance") {
+    const verbo = f.accion === "borrar" ? "Eliminar" : "Guardar el cambio de";
+    return `<div class="ask" id="fijoForm"><b>${verbo} «${esc(f.nombre)}»</b>
+      <div class="nota" style="margin:6px 0 0">${f.accion === "borrar" ? "¿Lo sacás solo este mes o también de los siguientes?" : `${money(f.monto)}: ¿aplica solo este mes o también a los siguientes?`}</div>
+      <div class="acc"><button class="p" id="fAlc1" onclick="fijoConfirmar('este')">Solo ${mes}</button><button class="p" id="fAlc2" onclick="fijoConfirmar('siguientes')">${mes} y siguientes</button>
+      <button onclick="fijoEd.paso='form';$('objMes').innerHTML=htmlObjMes()">Volver</button></div></div>`;
+  }
+  return `<div class="ask" id="fijoForm"><b>Fijo de ${mes}</b>
+    <div class="campo"><label>Nombre</label><input id="fNom" type="text" value="${esc(f.nombre)}"></div>
+    <div class="campo"><label>Monto</label><input id="fMon" type="text" inputmode="decimal" value="${f.monto}"></div>
+    <div class="acc"><button class="p" onclick="fijoSiguiente('guardar')">Guardar</button><button class="x" onclick="fijoSiguiente('borrar')">Eliminar</button><button onclick="fijoEd=null;$('objMes').innerHTML=htmlObjMes()">Cancelar</button></div></div>`;
+}
+function fijoSiguiente(accion) {
+  const f = fijoEd;
+  if (accion === "guardar") {
+    const monto = leerMonto($("fMon").value), nombre = $("fNom").value.trim();
+    if (!(monto > 0) || !nombre) { alert("Revisá el nombre y el monto"); return; }
+    f.monto = monto; f.nombre = nombre;
+  }
+  f.accion = accion; f.paso = "alcance";
+  $("objMes").innerHTML = htmlObjMes();
+}
+async function fijoConfirmar(alcance) {
+  const f = fijoEd;
+  $("fAlc1").disabled = $("fAlc2").disabled = true;
+  try {
+    const d = await api(f.accion === "borrar" ? "borrarFijo" : "editarFijo", { fila: f.fila, mes: f.mes, alcance, nombre: f.nombre, monto: f.monto });
+    const key = f.mes; fijoEd = null;
+    objTodos = (d.pasados || []).concat(d.meses);
+    objIdx = Math.max(0, objTodos.findIndex(x => x.key === key));
+    cache.objetivo = d;
+    $("vista").innerHTML = htmlObjetivo(d);
+  } catch (e) { alert(e.message); $("fAlc1").disabled = $("fAlc2").disabled = false; }
+}
+
+// ==== Resumen de tarjeta (captura → conciliación) ====
+let resDat = null, resCmp = null, resDet = null;
+
+function htmlResumen() {
+  const subir = (t) => `<label class="btn btn2" style="margin-top:0;flex:1" for="rf${t[0]}">${t}</label><input type="file" id="rf${t[0]}" accept="image/*" class="hidden" onchange="resSubir(this,'${t}')">`;
+  return `<h2>Resumen de tarjeta</h2><div class="card" id="resBox">
+    <div class="nota" style="margin-top:0">Sacale captura a la parte de impuestos y total de tu resumen. La app suma lo que tenés cargado y te dice si cuadra.</div>
+    <div style="display:flex;gap:8px">${subir("Banco Ciudad")}${subir("Mercado Pago")}</div>
+    <div id="resOut"></div></div>`;
+}
+async function resSubir(inp, tarjeta) {
+  const f = inp.files[0]; if (!f) return;
+  const out = $("resOut"); out.innerHTML = `<div class="nota">Leyendo resumen…</div>`;
+  try {
+    const imagen = await reducirImagen(f);
+    const r = await api("leerResumen", { imagen });
+    resDat = { tarjeta: r.tarjeta || tarjeta, total: r.total, impuestos: r.impuestos, vencimiento: r.vencimiento };
+    resCmp = null; resDet = null;
+    out.innerHTML = htmlResForm(r);
+  } catch (e) { out.innerHTML = `<div class="nota mal">${esc(e.message)}</div>`; }
+  inp.value = "";
+}
+function htmlResForm(r) {
+  return `<div class="item" style="margin-top:12px">
+    <div class="campo"><label>Tarjeta</label><select id="rT">${TARJETAS.map(t => `<option ${t === resDat.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+    <div class="fila"><div class="campo"><label>Total del resumen</label><input id="rTot" type="text" inputmode="decimal" value="${resDat.total || ""}"></div>
+    <div class="campo"><label>Impuestos</label><input id="rImp" type="text" inputmode="decimal" value="${resDat.impuestos || 0}"></div></div>
+    <div class="campo"><label>Vencimiento</label><input id="rVto" type="date" value="${resDat.vencimiento}"></div>
+    ${(r.detalleImpuestos || []).length ? `<div class="nota">${r.detalleImpuestos.map(x => esc(x.concepto) + " " + money2(x.monto)).join(" · ")}</div>` : ""}
+    <div class="acc"><button class="guardar" id="rBtn" onclick="resComparar()">Comparar</button></div></div><div id="resCmp"></div>`;
+}
+async function resComparar() {
+  resDat = { tarjeta: $("rT").value, total: leerMonto($("rTot").value), impuestos: leerMonto($("rImp").value) || 0, vencimiento: $("rVto").value };
+  $("rBtn").disabled = true;
+  try { resCmp = await api("compararResumen", resDat); $("resCmp").innerHTML = htmlResCmp(); }
+  catch (e) { $("resCmp").innerHTML = `<div class="nota mal">${esc(e.message)}</div>`; }
+  $("rBtn").disabled = false;
+}
+function htmlResCmp() {
+  const c = resCmp;
+  return `<div class="card" style="margin:12px 0 0;background:var(--bg)">
+    <div class="row"><span>Cuotas cargadas (${mesNombre(c.mesKey)})</span><span>${money2(c.cuotas)}</span></div>
+    <div class="row"><span>Consumos de un pago</span><span>${money2(c.unicos)}</span></div>
+    <div class="row"><span>Impuestos del resumen</span><span>${money2(c.impuestos)}</span></div>
+    <div class="row"><span><b>Debería dar</b></span><span><b>${money2(c.esperado)}</b></span></div>
+    <div class="row"><span>Total del resumen</span><span>${money2(c.total)}</span></div>
+    <div class="row"><span>${c.cuadra ? "✔ Cuadra" : "⚠ Diferencia"}</span><span class="${c.cuadra ? "ok" : "mal"}">${c.cuadra ? "" : (c.diferencia > 0 ? "falta " : "sobra ") + money2(Math.abs(c.diferencia))}</span></div>
+    ${c.cuadra ? "" : `<div class="nota">${c.diferencia > 0 ? "Hay consumos en el resumen que no tenés cargados." : "Tenés cargado algo que no figura en este resumen."} Subí la captura del detalle de cuotas y consumos para encontrar cuál es.</div>
+      <label class="btn btn2" for="rfDet" style="margin-top:6px">Subir detalle de cuotas</label><input type="file" id="rfDet" accept="image/*" class="hidden" onchange="resDetalle(this)">`}
+    <div id="resDet"></div>
+    <button class="btn btn2" id="rAg" onclick="resAgendar()">Agendar vencimiento (${fechaLarga(c.vencimiento)})</button>
+  </div>`;
+}
+async function resAgendar() {
+  const c = resCmp; $("rAg").disabled = true;
+  try {
+    const r = await api("cargarFactura", { concepto: "Tarjeta " + c.tarjeta, monto: c.total, vencimiento: c.vencimiento });
+    $("rAg").outerHTML = `<div class="nota ok">Agendado. Aviso de rescate el ${fechaLarga(r.rescate)} y de pago el ${fechaLarga(r.pago)}.</div>`;
+  } catch (e) { alert(e.message); $("rAg").disabled = false; }
+}
+async function resDetalle(inp) {
+  const f = inp.files[0]; if (!f) return;
+  const out = $("resDet"); out.innerHTML = `<div class="nota">Leyendo detalle…</div>`;
+  try {
+    const imagen = await reducirImagen(f);
+    resDet = await api("leerDetalle", { imagen, tarjeta: resCmp.tarjeta, vencimiento: resCmp.vencimiento });
+    out.innerHTML = htmlResDet();
+  } catch (e) { out.innerHTML = `<div class="nota mal">${esc(e.message)}</div>`; }
+  inp.value = "";
+}
+function htmlResDet() {
+  const d = resDet;
+  const falt = d.faltan.map((l, i) => `<div class="item" id="rd${i}" style="margin-top:8px">
+      <div class="campo"><label>Concepto</label><input id="rdC${i}" type="text" value="${esc(l.concepto)}"></div>
+      <div class="fila"><div class="campo"><label>Monto</label><input id="rdM${i}" type="text" inputmode="decimal" value="${l.monto}"></div>
+      <div class="campo"><label>${l.total > 1 ? "Cuotas que faltan (con esta)" : "Pago"}</label><input id="rdN${i}" type="number" min="1" max="36" value="${l.restantes}" ${l.total > 1 ? "" : "disabled"}></div></div>
+      <div class="nota">${l.total > 1 ? `Cuota ${l.actual} de ${l.total}` : "Un solo pago"}</div>
+      <div class="acc"><button class="descartar" onclick="$('rd${i}').remove()">Ignorar</button><button class="guardar" id="rdG${i}" onclick="resAgregar(${i})">Agregar</button></div></div>`).join("");
+  const sob = d.sobran.length ? `<div class="nota" style="margin-top:8px">Cargado en la app pero que no aparece en el detalle: ${d.sobran.map(x => esc(x.nombre) + " " + money(x.monto)).join(", ")}.</div>` : "";
+  return `<div class="nota" style="margin-top:8px">${d.coinciden} de ${d.lineas} líneas coinciden. ${d.faltan.length ? "No encontré en la app:" : "No falta ninguna."}</div>${falt}${sob}`;
+}
+async function resAgregar(i) {
+  const l = resDet.faltan[i], btn = $("rdG" + i);
+  const monto = leerMonto($("rdM" + i).value), n = Number($("rdN" + i).value) || 1, concepto = $("rdC" + i).value.trim();
+  if (!concepto || !(monto > 0)) { alert("Revisá el concepto y el monto"); return; }
+  btn.disabled = true;
+  try {
+    await api("cargar", l.total > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: resCmp.tarjeta, primer: resCmp.mesKey }
+                                    : { tipo: "unico", concepto, monto, tarjeta: resCmp.tarjeta, pago: resCmp.mesKey });
+    $("rd" + i).innerHTML = `<div class="nota ok">Agregado: ${esc(concepto)}</div>`;
+    resCmp = await api("compararResumen", resDat);
+    const ya = $("resDet").innerHTML; $("resCmp").innerHTML = htmlResCmp(); $("resDet").innerHTML = ya;
+  } catch (e) { alert(e.message); btn.disabled = false; }
 }
 
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => cargar(b.dataset.v).catch(e => mostrarLogin(e.message))));
