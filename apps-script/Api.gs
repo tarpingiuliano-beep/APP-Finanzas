@@ -1272,3 +1272,24 @@ function resumenFondo(activos) {
   }
   return { saldo: saldo, meses: meses.filter(m => m.total > 0).slice(0, 12), alcanza: alcanza, falta: falta, plazo: plazo };
 }
+
+
+// Aviso del día del vencimiento de un plazo fijo (sin renovación automática). Lo llama checkAvisos una vez por día.
+function avisoPlazosFijos(hoy) {
+  const hoyIso = fechaTxt(hoy), props = PropertiesService.getScriptProperties();
+  const hechos = JSON.parse(props.getProperty("PF_AVISADO") || "{}");
+  const venc = leerPos().filter(p => p.vence === hoyIso && p.tna > 0 && !hechos[p.id + "|" + hoyIso]);
+  if (!venc.length) return "";
+  const f = apiInversiones().fondo || {};
+  const fm = (n) => "$" + Math.round(n).toLocaleString("es-AR");
+  const lineas = venc.map(p => {
+    const dias = Math.max(0, Math.round((aFecha(p.vence) - aFecha(p.constituido || hoyIso)) / 86400000));
+    const total = p.valor * (1 + p.tna / 100 * dias / 365);
+    let t = "• " + p.activo + (p.plataforma ? " (" + p.plataforma + ")" : "") + ": cobrás unos " + fm(total) + " (capital " + fm(p.valor) + ", " + String(p.tna).replace(".", ",") + "% TNA).";
+    if (f.plazo && f.plazo.id === p.id && f.plazo.cuotasProx > 0) t += " Retirá " + fm(Math.min(f.plazo.cuotasProx, total)) + " para las cuotas y renová " + fm(f.plazo.renovar) + ".";
+    return t;
+  });
+  venc.forEach(p => { hechos[p.id + "|" + hoyIso] = 1; });
+  props.setProperty("PF_AVISADO", JSON.stringify(hechos));
+  return lineas.join("\n") + "\n\nNo tiene renovación automática: entrá a tu plataforma a cobrarlo o renovarlo, y después actualizalo en Inversión.";
+}
