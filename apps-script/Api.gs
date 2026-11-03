@@ -28,6 +28,7 @@ function doPost(e) {
     if (body.accion === "objetivo") return respuesta({ ok: true, data: apiObjetivo() });
     if (body.accion === "editarFactura") return respuesta({ ok: true, data: apiEditarFactura(body.datos || {}) });
     if (body.accion === "borrarFactura") return respuesta({ ok: true, data: apiBorrarFactura(body.datos || {}) });
+    if (body.accion === "fijosEditables") return respuesta({ ok: true, data: calcularFijos().items.filter(f => f.editable && f.fila).map(f => ({ nombre: f.nombre, fila: f.fila, desde: f.desde, hasta: f.hasta })) });
     if (body.accion === "cargarFactura") return respuesta({ ok: true, data: apiCargarFactura(body.datos || {}) });
     if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
     if (body.accion === "registrarToken") return respuesta({ ok: true, data: registrarToken(body.datos || {}) });
@@ -392,9 +393,16 @@ function apiCargarFactura(d) {
   }
   const rescate = restarDiasHabiles(vto, 2);
   const pago = new Date(vto); pago.setDate(pago.getDate() - 1);
+  // Opcional: la factura corresponde a un fijo → actualiza su monto (por defecto solo ese mes). Se valida antes de guardar nada.
+  let fijo = null;
+  if (d.fijoFila) {
+    fijo = { fila: d.fijoFila, mes: mesKey(pago), alcance: d.fijoAlcance === "siguientes" ? "siguientes" : "este", monto: monto };
+    leerFijoFila(fijo);
+  }
   hoja.appendRow([concepto, categoriaFactura(concepto), monto, fechaTxt(vto), fechaTxt(rescate), "Pendiente", fechaTxt(pago), "Pendiente"]);
   actualizarCadencia(concepto, vto);
-  return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago) };
+  if (fijo) editarFijo(fijo);
+  return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago), fijo: !!fijo };
 }
 
 function validarFactura(d) {
