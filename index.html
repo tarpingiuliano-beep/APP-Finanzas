@@ -207,7 +207,7 @@ async function cargar(v) {
   vistaActual = v;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
   $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", inversion: "Inversión", cargar: "Cargar" }[v];
-  if (v === "cargar") { $("vista").innerHTML = htmlCargar(); return; }
+  if (v === "cargar") { $("vista").innerHTML = htmlCargar(); cargarTarjetas().then(() => { if (vistaActual === "cargar" && $("cNota")) previa(); }); return; }
   if (v === "horas") { await cargarHoras(horasMes); return; }
   if (v === "inversion") { invNav = { v: "main" }; await invCargar(); return; }
   const d = await api(v);
@@ -463,7 +463,7 @@ function htmlCargar() {
       <div class="campo"><label>${cuotas ? "Monto de la cuota" : fac ? "Monto a pagar" : "Monto"}</label><input id="cMonto" type="text" inputmode="decimal" autocomplete="off" placeholder="0" oninput="previa()"></div>
       ${cuotas ? `<div class="campo"><label>Cantidad de cuotas</label><input id="cCuotas" type="number" inputmode="numeric" min="2" max="36" placeholder="Ej: 6" oninput="previa()"></div>` : ""}
       ${fac ? `<div class="campo"><label>Vencimiento</label><input id="cVto" type="date" onchange="previa()"></div>`
-            : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
+            : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta" onchange="previa()">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
     </div>
     ${cuotas ? `<label class="tilde"><input type="checkbox" id="cFondo"><span>Se paga del fondo<small>La cuota se muestra pero no resta de tu sueldo: sale del fondo para cuotas.</small></span></label>` : ""}
     ${fac ? "" : `<label class="tilde"><input type="checkbox" id="cSig" onchange="previa()"><span>Siguiente resumen<small>Marcalo si el consumo fue después del cierre de la tarjeta: se empieza a pagar un mes más tarde.</small></span></label>`}
@@ -486,7 +486,13 @@ function leerMonto(txt) {
   return Number(t);
 }
 const money2 = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(Number(n || 0)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-function mesPago(sig) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + (sig ? 2 : 1)); return d.toLocaleDateString("es-AR", { month: "long", year: "numeric" }); }
+let tarjInfo = null;
+async function cargarTarjetas() { try { tarjInfo = await api("tarjetas"); } catch (e) {} }
+function mesPago(sig, tj) {
+  const t = tarjInfo && tarjInfo.find(x => x.nombre === tj);
+  if (t) return mesNombre(sig ? t.pagoSig : t.pago);
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() + (sig ? 2 : 1)); return d.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+}
 function fechaCorta(iso) { const [a, m, d] = String(iso).split("-"); return `${d}/${m}`; }
 
 function previa() {
@@ -496,7 +502,7 @@ function previa() {
   const sig = $("cSig") ? $("cSig").checked : false;
   const partes = [];
   if (m > 0) partes.push(tipoCarga === "cuotas" && n >= 2 ? `${n} cuotas de ${money2(m)} · total ${money2(m * n)}` : money2(m));
-  if (tipoCarga !== "factura") partes.push(`se paga por primera vez en ${mesPago(sig)}`);
+  if (tipoCarga !== "factura") partes.push(`se paga por primera vez en ${mesPago(sig, $("cTarjeta") ? $("cTarjeta").value : "")}`);
   $("cNota").textContent = partes.join(" · ");
 }
 
@@ -513,7 +519,7 @@ async function enviarCarga() {
     $("vista").innerHTML = htmlCargar();
     $("cNota").className = "nota ok";
     $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}`
-      : `Guardado: ${datos.concepto} · ${money2(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""} · se paga desde ${mesPago(datos.siguiente)}`;
+      : `Guardado: ${datos.concepto} · ${money2(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""} · se paga desde ${mesPago(datos.siguiente, datos.tarjeta)}`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
@@ -584,7 +590,7 @@ async function guardarItem(i) {
   try {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     const el = $("it" + i); el.classList.add("hecho");
-    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente)}</div>`;
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente, datos.tarjeta)}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
@@ -989,7 +995,24 @@ function htmlResumen() {
   return `<h2>Resumen de tarjeta</h2><div class="card" id="resBox">
     <div class="nota" style="margin-top:0">Sacale captura a la parte de impuestos y total de tu resumen. La app suma lo que tenés cargado y te dice si cuadra.</div>
     <div style="display:flex;gap:8px">${subir("Banco Ciudad")}${subir("Mercado Pago")}</div>
-    <div id="resOut"></div></div>`;
+    <div id="resOut"></div>
+    <div class="nota" style="margin:12px 0 0" id="cierres">${htmlCierres()}</div></div>`;
+}
+function htmlCierres() {
+  if (!tarjInfo) { cargarTarjetas().then(() => { const e = $("cierres"); if (e) e.innerHTML = htmlCierres(); }); return "Cargando cierres…"; }
+  return tarjInfo.map(t => `${esc(t.nombre)}: cierra el ${t.cierre}, vence ${t.vto ? "el mes siguiente" : "el mismo mes"} · hoy carga a ${mesNombre(t.pago)}`).join("<br>") + ` <button class="mini" onclick="editarCierres()">Cambiar</button>`;
+}
+function editarCierres() {
+  $("cierres").innerHTML = tarjInfo.map((t, i) => `<div class="campo"><label>${esc(t.nombre)}: día de cierre</label><input id="ciD${i}" type="number" min="1" max="28" value="${t.cierre}"></div>
+    <div class="campo"><label>Vence</label><select id="ciV${i}"><option value="0" ${t.vto ? "" : "selected"}>El mismo mes del cierre</option><option value="1" ${t.vto ? "selected" : ""}>El mes siguiente</option></select></div>`).join("") +
+    `<button class="btn" id="ciG" onclick="guardarCierres()">Guardar cierres</button>`;
+}
+async function guardarCierres() {
+  const cambios = {};
+  tarjInfo.forEach((t, i) => { cambios[t.nombre] = { cierre: Number($("ciD" + i).value), vto: Number($("ciV" + i).value) }; });
+  $("ciG").disabled = true;
+  try { tarjInfo = await api("tarjetas", { cambios }); $("cierres").innerHTML = htmlCierres(); }
+  catch (e) { alert(e.message); $("ciG").disabled = false; }
 }
 async function resSubir(inp, tarjeta) {
   const f = inp.files[0]; if (!f) return;

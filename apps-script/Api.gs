@@ -40,6 +40,7 @@ function doPost(e) {
     if (body.accion === "leerResumen") return respuesta({ ok: true, data: apiLeerResumen(body.datos || {}) });
     if (body.accion === "compararResumen") return respuesta({ ok: true, data: apiCompararResumen(body.datos || {}) });
     if (body.accion === "leerDetalle") return respuesta({ ok: true, data: apiLeerDetalle(body.datos || {}) });
+    if (body.accion === "tarjetas") return respuesta({ ok: true, data: apiTarjetas(body.datos || {}) });
     if (body.accion === "fondoCuota") return respuesta({ ok: true, data: apiFondoCuota(body.datos || {}) });
     if (body.accion === "invPlazo") return respuesta({ ok: true, data: invPlazo(body.datos || {}) });
     if (body.accion === "inversiones") return respuesta({ ok: true, data: apiInversiones() });
@@ -318,7 +319,7 @@ function apiCargar(d) {
     if (!hoja.getRange(1, 10).getValue()) hoja.getRange(1, 10).setValue("Restantes al");
     // Cuota ya en curso (viene de un resumen): empieza en el mes del resumen; si es el mes actual queda en blanco ("ya corriendo")
     const primer = d.existente ? (/^\d{4}-\d{2}$/.test(String(d.primer || "")) && d.primer > mesKey(new Date()) ? d.primer : "")
-                               : sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);   // primer mes en que se paga
+                               : sumarMeses(mesPagoAbierto(tarjeta, new Date()), d.siguiente ? 1 : 0);   // primer mes en que se paga
     if (primer) hoja.getRange(fila, 6).setNumberFormat("@").setValue(primer);
     if (!hoja.getRange(1, 6).getValue()) hoja.getRange(1, 6).setValue("Primer pago");
     hoja.getRange(fila + 1, 2).setFormula("=SUM(B2:B" + fila + ")");
@@ -335,7 +336,7 @@ function apiCargar(d) {
       hoja.getRange("C2:C").setNumberFormat("$#,##0");
     }
     hoja.appendRow([new Date(), concepto, monto, tarjeta]);
-    const pago = /^\d{4}-\d{2}$/.test(String(d.pago || "")) ? d.pago : sumarMeses(mesKey(new Date()), d.siguiente ? 2 : 1);
+    const pago = /^\d{4}-\d{2}$/.test(String(d.pago || "")) ? d.pago : sumarMeses(mesPagoAbierto(tarjeta, new Date()), d.siguiente ? 1 : 0);
     const r = hoja.getLastRow();
     hoja.getRange(r, 5).setNumberFormat("@").setValue(pago);
     if (!hoja.getRange(1, 5).getValue()) hoja.getRange(1, 5).setValue("Mes de pago");
@@ -891,6 +892,7 @@ function apiCompararResumen(d) {
   const total = Number(d.total) || 0, impuestos = Number(d.impuestos) || 0;
   if (!(total > 0)) throw new Error("Falta el total del resumen");
   const r = itemsTarjetaMes(tarjeta, venc.slice(0, 7));
+  marcarResumenCargado(tarjeta, venc.slice(0, 7));
   const cuotas = r.items.filter(i => i.tipo === "cuota").reduce((a, i) => a + i.monto, 0);
   const unicos = r.items.filter(i => i.tipo === "unico").reduce((a, i) => a + i.monto, 0);
   const esperado = Math.round((cuotas + unicos + impuestos) * 100) / 100;
@@ -1306,4 +1308,61 @@ function avisoPlazosFijos(hoy) {
   venc.forEach(p => { hechos[p.id + "|" + hoyIso] = 1; });
   props.setProperty("PF_AVISADO", JSON.stringify(hechos));
   return lineas.join("\n") + "\n\nNo tiene renovación automática: entrá a tu plataforma a cobrarlo o renovarlo, y después actualizalo en Inversión.";
+}
+
+
+// ==== Cierre de cada tarjeta: en qué resumen cae un consumo nuevo ====
+// cierre = día del mes en que cierra; vto = 0 si vence el mismo mes del cierre, 1 si vence el mes siguiente.
+// "abierto" = mes de pago del resumen que todavía no cargaste: mientras no cargues el resumen cerrado, los consumos siguen yendo al actual.
+const TARJETAS_BASE = { "Banco Ciudad": { cierre: 28, vto: 1 }, "Mercado Pago": { cierre: 5, vto: 0 } };
+
+function cfgTarjetas() {
+  const crudo = PropertiesService.getScriptProperties().getProperty("TARJETAS_CFG");
+  const g = crudo ? JSON.parse(crudo) : {};
+  const out = {};
+  TARJETAS.forEach(t => { out[t] = Object.assign({ abierto: "" }, TARJETAS_BASE[t], g[t] || {}); });
+  return out;
+}
+function guardarCfgTarjetas(c) { PropertiesService.getScriptProperties().setProperty("TARJETAS_CFG", JSON.stringify(c)); }
+
+// Mes de pago según el calendario (sin saber si cargaste el resumen).
+function mesPagoCalendario(tarjeta, fecha) {
+  const c = cfgTarjetas()[tarjeta] || TARJETAS_BASE["Banco Ciudad"];
+  const m = mesKey(fecha);
+  const mesCierre = fecha.getDate() <= c.cierre ? m : sumarMeses(m, 1);
+  return sumarMeses(mesCierre, c.vto);
+}
+
+function mesPagoAbierto(tarjeta, fecha) {
+  const c = cfgTarjetas()[tarjeta] || TARJETAS_BASE["Banco Ciudad"];
+  const calc = mesPagoCalendario(tarjeta, fecha);
+  if (!c.abierto || calc <= c.abierto) return c.abierto && calc <= c.abierto ? c.abierto : calc;
+  // El calendario ya pasó al resumen siguiente, pero todavía no cargaste el cerrado: se mantiene el actual hasta 10 días después del cierre.
+  const ultCierre = fecha.getDate() >= c.cierre ? new Date(fecha.getFullYear(), fecha.getMonth(), c.cierre) : new Date(fecha.getFullYear(), fecha.getMonth() - 1, c.cierre);
+  const dias = Math.round((new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()) - ultCierre) / 86400000);
+  return dias > 10 ? calc : c.abierto;
+}
+
+// Al cargar el resumen que vence en "vKey", ese resumen queda cerrado: lo que se cargue desde ahora va al siguiente.
+function marcarResumenCargado(tarjeta, vKey) {
+  const c = cfgTarjetas(), sig = sumarMeses(vKey, 1);
+  if (!c[tarjeta] || (c[tarjeta].abierto && c[tarjeta].abierto >= sig)) return;
+  c[tarjeta].abierto = sig;
+  guardarCfgTarjetas(c);
+}
+
+function apiTarjetas(d) {
+  const c = cfgTarjetas();
+  if (d.cambios) {
+    TARJETAS.forEach(t => {
+      const x = d.cambios[t];
+      if (!x) return;
+      const cierre = Math.floor(Number(x.cierre)), vto = Number(x.vto) === 1 ? 1 : 0;
+      if (!(cierre >= 1 && cierre <= 28)) throw new Error("El día de cierre de " + t + " debe estar entre 1 y 28");
+      c[t].cierre = cierre; c[t].vto = vto;
+    });
+    guardarCfgTarjetas(c);
+  }
+  const hoy = new Date();
+  return TARJETAS.map(t => { const p = mesPagoAbierto(t, hoy); return { nombre: t, cierre: c[t].cierre, vto: c[t].vto, pago: p, pagoSig: sumarMeses(p, 1) }; });
 }
