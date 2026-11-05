@@ -393,16 +393,46 @@ function apiCargarFactura(d) {
   }
   const rescate = restarDiasHabiles(vto, 2);
   const pago = new Date(vto); pago.setDate(pago.getDate() - 1);
-  // Opcional: la factura corresponde a un fijo → actualiza su monto (por defecto solo ese mes). Se valida antes de guardar nada.
-  let fijo = null;
-  if (d.fijoFila) {
-    fijo = { fila: d.fijoFila, mes: mesKey(pago), alcance: d.fijoAlcance === "siguientes" ? "siguientes" : "este", monto: monto };
-    leerFijoFila(fijo);
-  }
+  // Toda factura impacta en Fijos (salvo que se marque "no es un fijo"): actualiza el fijo del mismo nombre o crea uno nuevo, en el mes elegido.
+  let plan = null;
+  if (d.fijo === true) plan = planFijoFactura(concepto, monto, /^\d{4}-\d{2}$/.test(String(d.fijoMes || "")) ? d.fijoMes : (mesKey(pago) < mesKey(new Date()) ? mesKey(new Date()) : mesKey(pago)), d.fijoFila, d.fijoAlcance);
   hoja.appendRow([concepto, categoriaFactura(concepto), monto, fechaTxt(vto), fechaTxt(rescate), "Pendiente", fechaTxt(pago), "Pendiente"]);
   actualizarCadencia(concepto, vto);
-  if (fijo) editarFijo(fijo);
-  return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago), fijo: !!fijo };
+  const fijo = plan ? aplicarPlanFijo(plan) : "";
+  return { guardado: "factura", rescate: fechaTxt(rescate), pago: fechaTxt(pago), fijo: fijo, fijoMes: plan ? plan.mes : "" };
+}
+
+function normTxt(t) { return String(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, ""); }
+// Decide qué hacer con los Fijos antes de guardar nada (así un error no deja la factura a medias).
+function planFijoFactura(concepto, monto, mes, fijoFila, alcance) {
+  if (mes < mesKey(new Date())) throw new Error("Ese mes ya está cerrado: elegí el actual o uno posterior");
+  alcance = alcance === "siguientes" ? "siguientes" : "este";
+  const items = calcularFijos().items.filter(f => f.fila);
+  const activo = f => (!f.desde || f.desde <= mes) && (!f.hasta || f.hasta >= mes);
+  const n = normTxt(concepto);
+  let x = null;
+  if (Number(fijoFila) > 0) {
+    x = items.filter(f => f.fila === Number(fijoFila))[0];
+    if (!x) throw new Error("No encuentro ese fijo");
+    if (!x.editable) return { tipo: "incluido", mes: mes };
+    if (!activo(x)) throw new Error("Ese fijo no está activo en " + mes);
+  } else if (fijoFila !== "nuevo") {
+    const cand = items.filter(f => { const m = normTxt(f.nombre); return m && (m === n || m.indexOf(n) >= 0 || n.indexOf(m) >= 0); });
+    const exacto = cand.filter(f => normTxt(f.nombre) === n);
+    const lista = (exacto.length ? exacto : cand).filter(activo);
+    x = lista[0] || null;
+    if (x && !x.editable) return { tipo: "incluido", mes: mes };   // monotributo, prepaga…: ya se calculan solos
+  }
+  if (x) { const dato = { fila: x.fila, mes: mes, alcance: alcance, monto: monto }; leerFijoFila(dato); return { tipo: "actualizar", dato: dato, mes: mes }; }
+  return { tipo: "nuevo", concepto: concepto, monto: monto, mes: mes, alcance: alcance };
+}
+function aplicarPlanFijo(p) {
+  if (p.tipo === "incluido") return "incluido";
+  if (p.tipo === "actualizar") { editarFijo(p.dato); return "actualizado"; }
+  const h = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Fijos");
+  agregarFijo(h, p.concepto, p.monto, p.mes, p.alcance === "siguientes" ? "" : p.mes);
+  MEMO = {};
+  return "creado";
 }
 
 function validarFactura(d) {

@@ -207,7 +207,7 @@ async function cargar(v) {
   vistaActual = v;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
   $("titulo").textContent = { inicio: "Inicio", deuda: "Deuda", objetivo: "Objetivo", horas: "Facturación", inversion: "Inversión", cargar: "Cargar" }[v];
-  if (v === "cargar") { $("vista").innerHTML = htmlCargar(); cargarTarjetas().then(() => { if (vistaActual === "cargar" && $("cNota")) previa(); }); cargarFijosEd().then(() => { const e = $("cFijo"); if (vistaActual === "cargar" && e && e.options.length === 1) fijosEd.forEach(f => e.add(new Option(f.nombre, f.fila))); }); return; }
+  if (v === "cargar") { $("vista").innerHTML = htmlCargar(); cargarTarjetas().then(() => { if (vistaActual === "cargar" && $("cNota")) previa(); }); cargarFijosEd().then(() => { const e = $("cFijo"); if (vistaActual === "cargar" && e && e.options.length === 2) fijosEd.forEach(f => e.add(new Option(f.nombre, f.fila), e.options.length - 1)); }); return; }
   if (v === "horas") { await cargarHoras(horasMes); return; }
   if (v === "inversion") { invNav = { v: "main" }; await invCargar(); return; }
   const d = await api(v);
@@ -452,14 +452,25 @@ const OBLIGACIONES = ["Movistar", "Luz", "Gas", "Agua", "Universidad", "Monotrib
 let tipoCarga = "cuotas";
 let fijosEd = null;
 async function cargarFijosEd() { try { fijosEd = await api("fijosEditables"); } catch (e) { fijosEd = []; } }
+function mesesFijo() {
+  const out = [], d = new Date(); d.setDate(1);
+  for (let i = 0; i < 4; i++) { out.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")); d.setMonth(d.getMonth() + 1); }
+  return out;
+}
 function htmlFijoSel(id) {
   const op = (fijosEd || []).map(f => `<option value="${f.fila}">${esc(f.nombre)}</option>`).join("");
-  return `<div class="campo"><label>¿Es uno de tus fijos? (opcional)</label>
-    <select id="${id}" onchange="$('${id}A').classList.toggle('hidden', !this.value)"><option value="">No, es un pago más</option>${op}</select></div>
-    <div class="campo hidden" id="${id}A"><label>Actualizar el monto del fijo</label>
-    <select id="${id}X"><option value="este">Solo este mes</option><option value="siguientes">Este mes y los siguientes</option></select></div>`;
+  const ms = mesesFijo().map(m => `<option value="${m}">${mesNombre(m)}</option>`).join("");
+  return `<label class="tilde"><input type="checkbox" id="${id}N" onchange="$('${id}B').classList.toggle('hidden', this.checked)"><span>Esto no es un fijo<small>Por defecto toda factura se suma a Fijos en Objetivo. Marcalo si es un pago aparte.</small></span></label>
+    <div id="${id}B">
+      <div class="campo"><label>Se suma a Fijos de…</label><select id="${id}M"><option value="">Según el vencimiento (se paga el día anterior)</option>${ms}</select></div>
+      <div class="campo"><label>Fijo</label><select id="${id}"><option value="">Automático (por el nombre)</option>${op}<option value="nuevo">Fijo nuevo</option></select></div>
+      <div class="campo"><label>Monto del fijo</label><select id="${id}X"><option value="este">Solo en ese mes</option><option value="siguientes">En ese mes y los siguientes</option></select></div>
+    </div>`;
 }
-function leerFijoSel(id) { const e = $(id); return e && e.value ? { fijoFila: Number(e.value), fijoAlcance: $(id + "X").value } : {}; }
+function leerFijoSel(id) {
+  if ($(id + "N") && $(id + "N").checked) return { fijo: false };
+  return { fijo: true, fijoFila: $(id).value === "nuevo" ? "nuevo" : Number($(id).value) || 0, fijoMes: $(id + "M").value, fijoAlcance: $(id + "X").value };
+}
 const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 function htmlCargar() {
@@ -529,7 +540,7 @@ async function enviarCarga() {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     $("vista").innerHTML = htmlCargar();
     $("cNota").className = "nota ok";
-    $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}${r.fijo ? " · fijo actualizado" : ""}`
+    $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}${{ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes), incluido: " · ya se cuenta en Fijos" }[r.fijo] || ""}`
       : `Guardado: ${datos.concepto} · ${money2(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""} · se paga desde ${mesPago(datos.siguiente, datos.tarjeta)}`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
@@ -603,7 +614,7 @@ async function guardarItem(i) {
   try {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     const el = $("it" + i); el.classList.add("hecho");
-    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente, datos.tarjeta)}</div>`;
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) + ({ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes || ""), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes || ""), incluido: " · ya se cuenta en Fijos" }[r.fijo] || "") : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente, datos.tarjeta)}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
