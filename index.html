@@ -164,7 +164,7 @@ function guardar(c) { try { sessionStorage.setItem("k", c); } catch (e) {} }
 function leer() { try { return sessionStorage.getItem("k"); } catch (e) { return null; } }
 
 // Acciones que se pueden repetir sin riesgo (leer, o guardar el mismo dato dos veces da lo mismo).
-const REPETIBLES = ["inversiones", "inicio", "deuda", "objetivo", "facturacion", "guardarJornada", "guardarValores", "editarFactura", "fijosEditables", "tarjetas"];
+const REPETIBLES = ["inversiones", "inicio", "deuda", "objetivo", "facturacion", "guardarJornada", "guardarValores", "editarFactura", "fijosEditables", "tarjetas", "fondoFijos"];
 
 async function api(accion, datos) {
   if (!window.API_URL) throw new Error("Falta configurar API_URL en config.js");
@@ -214,6 +214,7 @@ async function cargar(v) {
   cache[v] = d;
   if (v === "objetivo") objIdx = null;
   $("vista").innerHTML = v === "inicio" ? htmlInicio(d) : v === "objetivo" ? htmlObjetivo(d) : htmlDeuda(d);
+  if (v === "inicio") api("fondoFijos").then(x => { ffDatos = x; if ($("ffCard")) $("ffCard").innerHTML = htmlFF(); }).catch(() => {});
 }
 
 function htmlInicio(d) {
@@ -225,6 +226,7 @@ function htmlInicio(d) {
       <button class="mini" style="margin-left:6px" onclick="editarFac(${i})">Editar</button></div></div></div>`;
   }).join("") : `<div class="vacio">Sin vencimientos cargados</div>`;
   return `
+    <div id="ffCard">${htmlFF()}</div>
     <div class="big ${disp >= 0 ? "pos" : "neg"}"><small>Disponible de ${d.mes} (después de ahorrar)</small><b>${money(disp)}</b></div>
     <div class="card">
       <div class="row"><span>Ingreso neto</span><span>${money(d.ingreso)}</span></div>
@@ -238,6 +240,38 @@ function htmlInicio(d) {
     <h2>Próximos vencimientos</h2>
     <div class="card">${venc}</div>
     ${htmlPush()}${htmlBio()}`;
+}
+
+// ---- Fondo de fijos (Mercado Pago) ----
+let ffDatos = null;
+function htmlFF() {
+  const f = ffDatos;
+  if (!f || !f.visible) return "";
+  const listos = f.items.filter(x => x.estado === "listo"), faltan = f.items.filter(x => x.estado === "falta");
+  const hoy = new Date(), min = hoy.getFullYear() + "-" + String(hoy.getMonth() + 1).padStart(2, "0") + "-" + String(hoy.getDate()).padStart(2, "0");
+  return `<h2>Fondo de fijos · ${esc(f.label)}</h2><div class="card">
+    ${listos.length ? `<div class="row"><b>Suscribí al fondo de Mercado Pago</b><b>${money(f.total)}</b></div>` +
+      listos.map(x => `<div class="row"><span>${esc(x.nombre)}</span><span>${money(x.monto)}</span></div>`).join("") +
+      `<button class="btn" onclick="ffHecho(-1)">Ya suscribí</button>` : `<div class="vacio">Lo que ya sabés cuánto es, está suscripto.</div>`}
+    ${faltan.map(x => { const i = f.items.indexOf(x); return `<div class="item" style="margin-top:12px">
+      <div class="row"><span>${esc(x.nombre)}<small style="display:block;color:var(--muted)">Todavía sin factura · estimado ${money(x.monto)}</small></span></div>
+      <div class="campo"><label>Volver a avisar el…</label><input id="ffD${i}" type="date" min="${min}" value="${x.repetir || ""}"></div>
+      <div class="nota" id="ffN${i}">${x.repetir ? "Te aviso el " + fechaCorta(x.repetir) : ""}</div>
+      <div class="acc"><button class="descartar" onclick="ffHecho(${i})">Ya lo suscribí</button><button class="guardar" onclick="ffRepetir(${i})">Volver a avisar</button></div></div>`; }).join("")}
+  </div>`;
+}
+async function ffAccion(datos, nota) {
+  try { ffDatos = await api("fondoFijos", datos); $("ffCard").innerHTML = htmlFF(); }
+  catch (e) { if (nota) { nota.className = "nota mal"; nota.textContent = e.message; } else alert(e.message); }
+}
+function ffHecho(i) {
+  const f = ffDatos, claves = i < 0 ? f.items.filter(x => x.estado === "listo").map(x => x.clave) : [f.items[i].clave];
+  return ffAccion({ op: "hecho", claves });
+}
+function ffRepetir(i) {
+  const nota = $("ffN" + i), fecha = $("ffD" + i).value;
+  if (!fecha) { nota.className = "nota mal"; nota.textContent = "Elegí una fecha."; return; }
+  return ffAccion({ op: "repetir", claves: [ffDatos.items[i].clave], fecha }, nota);
 }
 
 function editarFac(i) {

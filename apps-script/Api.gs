@@ -28,6 +28,7 @@ function doPost(e) {
     if (body.accion === "objetivo") return respuesta({ ok: true, data: apiObjetivo() });
     if (body.accion === "editarFactura") return respuesta({ ok: true, data: apiEditarFactura(body.datos || {}) });
     if (body.accion === "borrarFactura") return respuesta({ ok: true, data: apiBorrarFactura(body.datos || {}) });
+    if (body.accion === "fondoFijos") return respuesta({ ok: true, data: apiFondoFijos(body.datos || {}) });
     if (body.accion === "fijosEditables") return respuesta({ ok: true, data: calcularFijos().items.filter(f => f.editable && f.fila).map(f => ({ nombre: f.nombre, fila: f.fila, desde: f.desde, hasta: f.hasta })) });
     if (body.accion === "cargarFactura") return respuesta({ ok: true, data: apiCargarFactura(body.datos || {}) });
     if (body.accion === "quitarRecordatorio") return respuesta({ ok: true, data: quitarRecordatorio(body.datos || {}) });
@@ -1403,4 +1404,86 @@ function apiTarjetas(d) {
   }
   const hoy = new Date();
   return TARJETAS.map(t => { const p = mesPagoAbierto(t, hoy); return { nombre: t, cierre: c[t].cierre, vto: c[t].vto, pago: p, pagoSig: sumarMeses(p, 1) }; });
+}
+
+
+// ==== Fondo de fijos (Mercado Pago): cuánto suscribir el primer día hábil del mes ====
+// Estado en la propiedad FONDO_FIJOS: { "2026-11": { hecho: [claves], repetir: { clave: "yyyy-MM-dd" }, avisos: {...} } }
+function primerHabilMes(anio, m0) { const d = new Date(anio, m0, 1); while (!esHabil(d)) d.setDate(d.getDate() + 1); return d; }
+function estadoFondo() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty("FONDO_FIJOS") || "{}"); } catch (e) { return {}; } }
+function guardarEstadoFondo(todo) {
+  const ks = Object.keys(todo).sort(), salida = {};
+  ks.slice(-4).forEach(k => { salida[k] = todo[k]; });
+  PropertiesService.getScriptProperties().setProperty("FONDO_FIJOS", JSON.stringify(salida));
+}
+
+function fondoFijosDatos(hoy) {
+  hoy = new Date(hoy || new Date()); hoy.setHours(0, 0, 0, 0);
+  const key = mesKey(hoy), mes = proyectar(1)[0];
+  const sec = mes.secciones.filter(x => x.tipo === "fijos")[0];
+  const est = estadoFondo()[key] || {};
+  const hecho = est.hecho || [], repetir = est.repetir || {};
+  const cad = leerCadencias(), cadVal = Object.keys(cad).map(k => cad[k]);
+  const items = (sec ? sec.items : []).map(f => {
+    const n = normTxt(f.nombre);
+    const c = cadVal.filter(x => { const m = normTxt(x.nombre); return m && n && (m === n || m.indexOf(n) >= 0 || n.indexOf(m) >= 0); })[0];
+    let estado = "listo";
+    if (hecho.indexOf(n) >= 0) estado = "hecho";
+    else if (c) {   // es un fijo que llega con factura: si la última cargada se paga en un mes anterior, todavía falta la de este mes
+      const v = aFecha(c.vto), pago = v ? new Date(v.getTime() - 86400000) : null;
+      if (!pago || mesKey(pago) < key) estado = "falta";
+    }
+    return { nombre: f.nombre, clave: n, monto: f.monto, estado: estado, repetir: repetir[n] || "" };
+  });
+  const primero = primerHabilMes(hoy.getFullYear(), hoy.getMonth());
+  return {
+    mes: key, label: mes.labelLargo, items: items,
+    total: items.filter(x => x.estado === "listo").reduce((a, x) => a + x.monto, 0),
+    primerHabil: fechaTxt(primero),
+    visible: hoy >= primero && items.some(x => x.estado !== "hecho")
+  };
+}
+
+function apiFondoFijos(d) {
+  const key = mesKey(new Date());
+  const todo = estadoFondo(), est = todo[key] || { hecho: [], repetir: {}, avisos: {} };
+  est.hecho = est.hecho || []; est.repetir = est.repetir || {}; est.avisos = est.avisos || {};
+  const claves = (d.claves || []).map(c => String(c).slice(0, 80));
+  if (d.op === "hecho") {
+    claves.forEach(c => { if (est.hecho.indexOf(c) < 0) est.hecho.push(c); delete est.repetir[c]; });
+  } else if (d.op === "repetir") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d.fecha || ""))) throw new Error("Elegí una fecha");
+    if (d.fecha < fechaTxt(new Date())) throw new Error("La fecha ya pasó");
+    claves.forEach(c => { est.repetir[c] = d.fecha; delete est.avisos["r" + c]; });
+  } else if (d.op === "deshacer") {
+    claves.forEach(c => { est.hecho = est.hecho.filter(x => x !== c); });
+  }
+  if (d.op) { todo[key] = est; guardarEstadoFondo(todo); }
+  return fondoFijosDatos();
+}
+
+// Devuelve los avisos del día [[título, cuerpo], …]; se llama desde checkAvisos (una vez por día).
+function fondoAvisos(hoy) {
+  hoy = new Date(hoy); hoy.setHours(0, 0, 0, 0);
+  const key = mesKey(hoy), todo = estadoFondo();
+  const est = todo[key] || { hecho: [], repetir: {}, avisos: {} };
+  est.avisos = est.avisos || {}; est.repetir = est.repetir || {};
+  const fmt = n => "$" + Number(n || 0).toLocaleString("es-AR", { maximumFractionDigits: 0 });
+  const datos = fondoFijosDatos(hoy), out = [];
+  const primero = primerHabilMes(hoy.getFullYear(), hoy.getMonth());
+  if (hoy.getTime() === primero.getTime() && !est.avisos.inicio) {
+    const faltan = datos.items.filter(x => x.estado === "falta");
+    let cuerpo = "Suscribí " + fmt(datos.total) + " al fondo de Mercado Pago (fijos de " + datos.label + ").";
+    if (faltan.length) cuerpo += "\nTodavía sin factura: " + faltan.map(x => x.nombre).join(", ") + ". Entrá a la app para elegir cuándo avisarte.";
+    out.push(["💰 Cobraste: fondo de fijos", cuerpo]);
+    est.avisos.inicio = true;
+  }
+  const hoyTxt = fechaTxt(hoy);
+  const reps = datos.items.filter(x => x.estado !== "hecho" && x.repetir && x.repetir <= hoyTxt && est.avisos["r" + x.clave] !== x.repetir);
+  if (reps.length) {
+    out.push(["💰 Fondo de fijos: pendientes", reps.map(x => "• " + x.nombre + ": " + fmt(x.monto) + (x.estado === "falta" ? " (todavía sin factura)" : "")).join("\n")]);
+    reps.forEach(x => { est.avisos["r" + x.clave] = x.repetir; });
+  }
+  if (out.length) { todo[key] = est; guardarEstadoFondo(todo); }
+  return out;
 }
