@@ -242,36 +242,43 @@ function htmlInicio(d) {
     ${htmlPush()}${htmlBio()}`;
 }
 
-// ---- Fondo de fijos (Mercado Pago) ----
+// ---- Fondo del mes (Mercado Pago) ----
 let ffDatos = null;
 function htmlFF() {
   const f = ffDatos;
   if (!f || !f.visible) return "";
-  const listos = f.items.filter(x => x.estado === "listo"), faltan = f.items.filter(x => x.estado === "falta");
   const hoy = new Date(), min = hoy.getFullYear() + "-" + String(hoy.getMonth() + 1).padStart(2, "0") + "-" + String(hoy.getDate()).padStart(2, "0");
-  return `<h2>Fondo de fijos · ${esc(f.label)}</h2><div class="card">
-    ${listos.length ? `<div class="row"><b>Suscribí al fondo de Mercado Pago</b><b>${money(f.total)}</b></div>` +
-      listos.map(x => `<div class="row"><span>${esc(x.nombre)}</span><span>${money(x.monto)}</span></div>`).join("") +
-      `<button class="btn" onclick="ffHecho(-1)">Ya suscribí</button>` : `<div class="vacio">Lo que ya sabés cuánto es, está suscripto.</div>`}
-    ${faltan.map(x => { const i = f.items.indexOf(x); return `<div class="item" style="margin-top:12px">
-      <div class="row"><span>${esc(x.nombre)}<small style="display:block;color:var(--muted)">Todavía sin factura · estimado ${money(x.monto)}</small></span></div>
-      <div class="campo"><label>Volver a avisar el…</label><input id="ffD${i}" type="date" min="${min}" value="${x.repetir || ""}"></div>
-      <div class="nota" id="ffN${i}">${x.repetir ? "Te aviso el " + fechaCorta(x.repetir) : ""}</div>
-      <div class="acc"><button class="descartar" onclick="ffHecho(${i})">Ya lo suscribí</button><button class="guardar" onclick="ffRepetir(${i})">Volver a avisar</button></div></div>`; }).join("")}
+  const acc = (n) => (n > 0 ? "agregar " : "quitar ") + money(Math.abs(n));
+  const filas = f.lineas.map((l, i) => {
+    const marca = l.estado === "anterior" ? "valor del mes anterior" : l.estado === "estimado" ? "estimado" : l.estado === "resumen" || l.estado === "factura" ? "con factura" : "";
+    const dif = l.dif != null && Math.abs(l.dif) >= 1 ? `<span class="pill ${l.dif > 0 ? "" : "hoy"}" style="margin-left:6px">${acc(l.dif)}</span>` : "";
+    return `<div id="ffL${i}"><div class="row"><span>${esc(l.nombre)}<small style="display:block;color:var(--muted)">${[marca, l.ajustado ? "ajustado" : ""].filter(Boolean).join(" · ")}</small></span>
+      <span>${money(l.monto)}${dif} <button class="mini" onclick="ffEditar(${i})">✎</button></span></div>
+      ${l.estado === "anterior" ? `<div class="campo"><label>Volver a avisar cuando llegue la factura</label><input id="ffD${i}" type="date" min="${min}" value="${l.repetir || ""}" onchange="ffRepetir(${i})"></div><div class="nota" id="ffN${i}">${l.repetir ? "Te aviso el " + fechaCorta(l.repetir) : ""}</div>` : ""}</div>`;
+  }).join("");
+  return `<h2>Fondo del mes · ${esc(f.label)}</h2><div class="card">
+    <div class="row"><b>Total a tener en el fondo</b><b>${money(f.total)}</b></div>
+    ${f.suscripto !== null ? `<div class="row"><span>Ya suscripto</span><span>${money(f.suscripto)}</span></div>
+      <div class="row"><b>${f.dif > 0 ? "Te falta agregar" : "Podés quitar"}</b><b class="${f.dif > 0 ? "mal" : "ok"}">${money(Math.abs(f.dif))}</b></div>` : `<div class="nota">Todavía no registraste lo que suscribiste este mes.</div>`}
+    ${filas}
+    <button class="btn" onclick="ffSuscribir()">${f.suscripto !== null ? "Ya lo ajusté en el fondo" : "Ya suscribí"}</button>
   </div>`;
 }
 async function ffAccion(datos, nota) {
   try { ffDatos = await api("fondoFijos", datos); $("ffCard").innerHTML = htmlFF(); }
   catch (e) { if (nota) { nota.className = "nota mal"; nota.textContent = e.message; } else alert(e.message); }
 }
-function ffHecho(i) {
-  const f = ffDatos, claves = i < 0 ? f.items.filter(x => x.estado === "listo").map(x => x.clave) : [f.items[i].clave];
-  return ffAccion({ op: "hecho", claves });
+function ffSuscribir() { return ffAccion({ op: "suscribir" }); }
+function ffEditar(i) {
+  const l = ffDatos.lineas[i];
+  $("ffL" + i).innerHTML = `<div class="campo"><label>${esc(l.nombre)}: monto que va al fondo (calculado ${money(l.calc)})</label><input id="ffM${i}" type="text" inputmode="decimal" value="${l.monto}"></div>
+    <div class="acc"><button class="descartar" onclick="ffAccion({ op: 'monto', clave: '${l.clave}', monto: null })">Usar el calculado</button><button class="guardar" onclick="ffGuardarMonto(${i})">Guardar</button></div>`;
 }
+function ffGuardarMonto(i) { return ffAccion({ op: "monto", clave: ffDatos.lineas[i].clave, monto: leerMonto($("ffM" + i).value) }); }
 function ffRepetir(i) {
   const nota = $("ffN" + i), fecha = $("ffD" + i).value;
-  if (!fecha) { nota.className = "nota mal"; nota.textContent = "Elegí una fecha."; return; }
-  return ffAccion({ op: "repetir", claves: [ffDatos.items[i].clave], fecha }, nota);
+  if (!fecha) return;
+  return ffAccion({ op: "repetir", claves: [ffDatos.lineas[i].clave], fecha }, nota);
 }
 
 function editarFac(i) {
@@ -301,9 +308,10 @@ async function borrarFac(i) {
 }
 
 function recordatorios(d) {
-  const r = d.recordatorios || [];
-  if (!r.length) return "";
-  return `<h2>Falta cargar</h2><div class="card">` + r.map((x, i) => `<div class="venc"><div>${esc(x.concepto)}<small>Último vencimiento ${fechaCorta(x.ultimoVto)}</small></div>
+  const r = d.recordatorios || [], rs = d.resumenes || [];
+  if (!r.length && !rs.length) return "";
+  return `<h2>Falta cargar</h2><div class="card">` + rs.map(x => `<div class="venc"><div>Resumen ${esc(x.tarjeta)}<small>Cerró el ${fechaCorta(x.cerro)}</small></div>
+    <div style="display:flex;gap:6px"><button class="mini ir" onclick="cargar('deuda')">Cargar</button></div></div>`).join("") + r.map((x, i) => `<div class="venc"><div>${esc(x.concepto)}<small>Último vencimiento ${fechaCorta(x.ultimoVto)}</small></div>
     <div style="display:flex;gap:6px"><button class="mini" onclick="quitarRec(${i})">Ya no</button><button class="mini ir" onclick="irCargar(${i})">Cargar</button></div></div>`).join("") + `</div>`;
 }
 
@@ -574,7 +582,7 @@ async function enviarCarga() {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     $("vista").innerHTML = htmlCargar();
     $("cNota").className = "nota ok";
-    $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}${{ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes), incluido: " · ya se cuenta en Fijos" }[r.fijo] || ""}`
+    $("cNota").textContent = fac ? `Guardado: ${datos.concepto} · ${money(datos.monto)} · rescate ${fechaCorta(r.rescate)}, pago ${fechaCorta(r.pago)}${{ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes), incluido: " · ya se cuenta en Fijos", credito: " · ya se cuenta en Deuda" }[r.fijo] || ""}${r.fondo ? " · Fondo: " + (r.fondo.dif > 0 ? "agregá " : "quitá ") + money(Math.abs(r.fondo.dif)) + " (" + r.fondo.nombre + ")" : ""}`
       : `Guardado: ${datos.concepto} · ${money2(datos.monto)}${tipoCarga === "cuotas" ? " × " + datos.cuotas : ""} · se paga desde ${mesPago(datos.siguiente, datos.tarjeta)}`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
@@ -648,7 +656,7 @@ async function guardarItem(i) {
   try {
     const r = await api(fac ? "cargarFactura" : "cargar", datos);
     const el = $("it" + i); el.classList.add("hecho");
-    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) + ({ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes || ""), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes || ""), incluido: " · ya se cuenta en Fijos" }[r.fijo] || "") : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente, datos.tarjeta)}</div>`;
+    el.innerHTML = `<div class="nota ok" style="margin:0">Guardado: ${esc(datos.concepto)} · ${money2(datos.monto)}${fac ? " · rescate " + fechaCorta(r.rescate) + ({ actualizado: " · fijo actualizado en " + mesNombre(r.fijoMes || ""), creado: " · sumado a Fijos de " + mesNombre(r.fijoMes || ""), incluido: " · ya se cuenta en Fijos", credito: " · ya se cuenta en Deuda" }[r.fijo] || "") + (r.fondo ? " · Fondo: " + (r.fondo.dif > 0 ? "agregá " : "quitá ") + money(Math.abs(r.fondo.dif)) + " (" + r.fondo.nombre + ")" : "") : (n >= 2 ? " × " + n : "") + " · se paga desde " + mesPago(datos.siguiente, datos.tarjeta)}</div>`;
   } catch (e) { nota.className = "nota mal"; nota.textContent = e.message; btn.disabled = false; }
 }
 
@@ -1078,7 +1086,7 @@ async function resSubir(inp, tarjeta) {
   try {
     const imagen = await reducirImagen(f);
     const r = await api("leerResumen", { imagen });
-    resDat = { tarjeta: r.tarjeta || tarjeta, total: r.total, impuestos: r.impuestos, vencimiento: r.vencimiento };
+    resDat = { tarjeta: r.tarjeta || tarjeta, total: r.total, impuestos: r.impuestos, dolares: r.dolares || 0, vencimiento: r.vencimiento };
     resCmp = null; resDet = null;
     out.innerHTML = htmlResForm(r);
   } catch (e) { out.innerHTML = `<div class="nota mal">${esc(e.message)}</div>`; }
@@ -1089,12 +1097,13 @@ function htmlResForm(r) {
     <div class="campo"><label>Tarjeta</label><select id="rT">${TARJETAS.map(t => `<option ${t === resDat.tarjeta ? "selected" : ""}>${t}</option>`).join("")}</select></div>
     <div class="fila"><div class="campo"><label>Total del resumen</label><input id="rTot" type="text" inputmode="decimal" value="${resDat.total || ""}"></div>
     <div class="campo"><label>Impuestos</label><input id="rImp" type="text" inputmode="decimal" value="${resDat.impuestos || 0}"></div></div>
+    <div class="campo"><label>Consumos en dólares (en pesos)</label><input id="rDol" type="text" inputmode="decimal" value="${resDat.dolares || 0}"></div>
     <div class="campo"><label>Vencimiento</label><input id="rVto" type="date" value="${resDat.vencimiento}"></div>
     ${(r.detalleImpuestos || []).length ? `<div class="nota">${r.detalleImpuestos.map(x => esc(x.concepto) + " " + money2(x.monto)).join(" · ")}</div>` : ""}
     <div class="acc"><button class="guardar" id="rBtn" onclick="resComparar()">Comparar</button></div></div><div id="resCmp"></div>`;
 }
 async function resComparar() {
-  resDat = { tarjeta: $("rT").value, total: leerMonto($("rTot").value), impuestos: leerMonto($("rImp").value) || 0, vencimiento: $("rVto").value };
+  resDat = { tarjeta: $("rT").value, total: leerMonto($("rTot").value), impuestos: leerMonto($("rImp").value) || 0, dolares: leerMonto($("rDol").value) || 0, vencimiento: $("rVto").value };
   $("rBtn").disabled = true;
   try { resCmp = await api("compararResumen", resDat); $("resCmp").innerHTML = htmlResCmp(); }
   catch (e) { $("resCmp").innerHTML = `<div class="nota mal">${esc(e.message)}</div>`; }
@@ -1105,6 +1114,7 @@ function htmlResCmp() {
   return `<div class="card" style="margin:12px 0 0;background:var(--bg)">
     <div class="row"><span>Cuotas cargadas (${mesNombre(c.mesKey)})</span><span>${money2(c.cuotas)}</span></div>
     <div class="row"><span>Consumos de un pago</span><span>${money2(c.unicos)}</span></div>
+    ${c.dolares > 0 ? `<div class="row"><span>Consumos en dólares</span><span>${money2(c.dolares)}</span></div>` : ""}
     <div class="row"><span>Impuestos del resumen</span><span>${money2(c.impuestos)}</span></div>
     <div class="row"><span><b>Debería dar</b></span><span><b>${money2(c.esperado)}</b></span></div>
     <div class="row"><span>Total del resumen</span><span>${money2(c.total)}</span></div>
