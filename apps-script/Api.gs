@@ -1469,10 +1469,9 @@ function resumenesPendientes(hoy) {
 // ==== Fondo de fijos (Mercado Pago): cuánto suscribir y cuánto agregar o quitar ====
 // Estado (propiedad FONDO_FIJOS): { "2026-11": { susc: { fecha, lineas: { clave: monto } }, repetir: { clave: "yyyy-MM-dd" }, avisos: {...} } }
 // Ajustes por concepto (propiedad FONDO_CFG): { clave: monto que va al fondo }; sin ajuste se usa el valor calculado.
-const FONDO_AHORRO = 100000;
-const FONDO_AJUSTES_BASE = { alquiler: 310000, supermercado: 200000, psicoanalista: 120000, agua: 10000, starlink: 0, iibb: 0 };
-const FONDO_SEMILLA = { "2026-11": { tarjetabancociudad: 200267.88, tarjetamercadopago: 770375, credito: 76090.2, alquiler: 310000, supermercado: 200000,
-  luz: 19405.27, gas: 0, movistar: 25608, psicoanalista: 120000, monotributo: 66020, universidad: 71694, agua: 10000, obrasocialprepaga: 98313, ahorro: 100000 } };
+// Conceptos que no van al fondo (se pueden cambiar desde la tarjeta de la app); el ahorro no forma parte del fondo.
+const FONDO_AJUSTES_BASE = { starlink: 0, iibb: 0, gym: 0 };
+const FONDO_PSICO_CUOTAS = 2;   // del psicoanalista siempre se guardan dos sesiones
 
 function primerHabilMes(anio, m0) { const d = new Date(anio, m0, 1); while (!esHabil(d)) d.setDate(d.getDate() + 1); return d; }
 function estadoFondo() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty("FONDO_FIJOS") || "{}"); } catch (e) { return {}; } }
@@ -1515,12 +1514,17 @@ function fondoLineasMes(key, mes) {
     lin.push({ nombre: nombre, clave: clave, calc: calc, monto: aj != null ? Number(aj) : calc, ajustado: aj != null, estado: estado, repetir: rep[clave] || "" });
   };
   const sec = mes.secciones.filter(x => x.tipo === "fijos")[0];
+  const desc = mes.secciones.filter(x => x.titulo === "Descuento de alquiler").reduce((a, x) => a + x.total, 0);   // negativo
   (sec ? sec.items : []).forEach(f => {
     const n = claveFijo(f.nombre);
+    let calc = f.monto, nota = "";
+    if (n === "alquiler" && desc) { calc = f.monto + desc; nota = "neto del descuento"; }
+    if (/^psicoanal/.test(n)) { calc = Math.min(f.monto, PRECIO_SESION * FONDO_PSICO_CUOTAS); nota = FONDO_PSICO_CUOTAS + " sesiones"; }
     const c = cadVal.filter(x => { const m = normTxt(x.nombre); return m && n && (m === n || m.indexOf(n) >= 0 || n.indexOf(m) >= 0); })[0];
     let estado = "fijo";
     if (c) { const v = aFecha(c.vto), pago = v ? new Date(v.getTime() - 86400000) : null; estado = pago && mesKey(pago) >= key ? "factura" : "anterior"; }
-    push(f.nombre, n, f.monto, estado);
+    push(f.nombre, n, calc, estado);
+    if (nota) lin[lin.length - 1].nota = nota;
   });
   TARJETAS.forEach(t => {
     const ft = fac.filter(x => x.clave === normTxt("Tarjeta " + t))[0];
@@ -1529,7 +1533,6 @@ function fondoLineasMes(key, mes) {
   const pre = mes.secciones.filter(x => x.titulo === "Préstamo")[0];
   const fp = fac.filter(x => x.cat === "Crédito" && !/tarjeta/.test(x.clave))[0];
   if (pre || fp) push("Crédito (préstamo)", "credito", fp ? fp.monto : (pre ? pre.total : 0), fp ? "factura" : "estimado");
-  push("Ahorro", "ahorro", FONDO_AHORRO, "fijo");
   return lin;
 }
 
@@ -1538,15 +1541,13 @@ function fondoFijosDatos(hoy) {
   const key = mesKey(hoy), mes = proyectar(1)[0];
   const est = estadoFondo()[key] || {};
   const lineas = fondoLineasMes(key, mes);
-  const snap = (est.susc && est.susc.lineas) || FONDO_SEMILLA[key] || null;
+  const snap = (est.susc && est.susc.lineas) || null;
   lineas.forEach(l => {
     l.susc = snap ? Number(snap[l.clave] || 0) : null;
-    // Un resumen sin cargar es solo una estimación: hasta cargarlo se mantiene lo ya suscripto, para no proponer ajustes falsos.
-    if (snap && l.estado === "estimado" && l.susc > 0 && !l.ajustado) l.monto = l.susc;
     l.dif = snap ? Math.round((l.monto - l.susc) * 100) / 100 : null;
   });
   const total = Math.round(lineas.reduce((a, l) => a + l.monto, 0) * 100) / 100;
-  const suscripto = snap ? Math.round(Object.keys(snap).reduce((a, k) => a + Number(snap[k] || 0), 0) * 100) / 100 : null;
+  const suscripto = snap ? (est.susc.total != null ? Number(est.susc.total) : Math.round(Object.keys(snap).reduce((a, k) => a + Number(snap[k] || 0), 0) * 100) / 100) : null;
   const dif = snap ? Math.round((total - suscripto) * 100) / 100 : null;
   const primero = primerHabilMes(hoy.getFullYear(), hoy.getMonth());
   return { mes: key, label: mes.labelLargo, lineas: lineas, total: total, suscripto: suscripto, dif: dif,
@@ -1569,7 +1570,8 @@ function apiFondoFijos(d) {
   if (d.op === "suscribir") {
     const f = fondoFijosDatos(), lin = {};
     f.lineas.forEach(l => { lin[l.clave] = l.monto; });
-    est.susc = { fecha: fechaTxt(new Date()), lineas: lin };
+    const m = Number(d.monto);
+    est.susc = { fecha: fechaTxt(new Date()), lineas: lin, total: m >= 0 && d.monto !== undefined && d.monto !== null && d.monto !== "" ? m : f.total };
     est.avisos.dif = 0;
     claves.forEach(c => { delete est.repetir[c]; });
   } else if (d.op === "monto") {

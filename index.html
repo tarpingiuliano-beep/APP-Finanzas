@@ -252,7 +252,7 @@ function htmlFF() {
   const filas = f.lineas.map((l, i) => {
     const marca = l.estado === "anterior" ? "valor del mes anterior" : l.estado === "estimado" ? "estimado" : l.estado === "resumen" || l.estado === "factura" ? "con factura" : "";
     const dif = l.dif != null && Math.abs(l.dif) >= 1 ? `<span class="pill ${l.dif > 0 ? "" : "hoy"}" style="margin-left:6px">${acc(l.dif)}</span>` : "";
-    return `<div id="ffL${i}"><div class="row"><span>${esc(l.nombre)}<small style="display:block;color:var(--muted)">${[marca, l.ajustado ? "ajustado" : ""].filter(Boolean).join(" · ")}</small></span>
+    return `<div id="ffL${i}"><div class="row"><span>${esc(l.nombre)}<small style="display:block;color:var(--muted)">${[marca, l.nota || "", l.ajustado ? (l.monto === 0 ? "fuera del fondo" : "ajustado") : ""].filter(Boolean).join(" · ")}</small></span>
       <span>${money(l.monto)}${dif} <button class="mini" onclick="ffEditar(${i})">✎</button></span></div>
       ${l.estado === "anterior" ? `<div class="campo"><label>Volver a avisar cuando llegue la factura</label><input id="ffD${i}" type="date" min="${min}" value="${l.repetir || ""}" onchange="ffRepetir(${i})"></div><div class="nota" id="ffN${i}">${l.repetir ? "Te aviso el " + fechaCorta(l.repetir) : ""}</div>` : ""}</div>`;
   }).join("");
@@ -261,14 +261,15 @@ function htmlFF() {
     ${f.suscripto !== null ? `<div class="row"><span>Ya suscripto</span><span>${money(f.suscripto)}</span></div>
       <div class="row"><b>${f.dif > 0 ? "Te falta agregar" : "Podés quitar"}</b><b class="${f.dif > 0 ? "mal" : "ok"}">${money(Math.abs(f.dif))}</b></div>` : `<div class="nota">Todavía no registraste lo que suscribiste este mes.</div>`}
     ${filas}
-    <button class="btn" onclick="ffSuscribir()">${f.suscripto !== null ? "Ya lo ajusté en el fondo" : "Ya suscribí"}</button>
+    <div class="campo"><label>Monto que tenés suscripto en el fondo</label><input id="ffS" type="text" inputmode="decimal" value="${f.suscripto !== null ? f.suscripto : f.total}"></div>
+    <button class="btn" onclick="ffSuscribir()">Guardar lo que suscribí</button>
   </div>`;
 }
 async function ffAccion(datos, nota) {
   try { ffDatos = await api("fondoFijos", datos); $("ffCard").innerHTML = htmlFF(); }
   catch (e) { if (nota) { nota.className = "nota mal"; nota.textContent = e.message; } else alert(e.message); }
 }
-function ffSuscribir() { return ffAccion({ op: "suscribir" }); }
+function ffSuscribir() { return ffAccion({ op: "suscribir", monto: leerMonto($("ffS").value) }); }
 function ffEditar(i) {
   const l = ffDatos.lineas[i];
   $("ffL" + i).innerHTML = `<div class="campo"><label>${esc(l.nombre)}: monto que va al fondo (calculado ${money(l.calc)})</label><input id="ffM${i}" type="text" inputmode="decimal" value="${l.monto}"></div>
