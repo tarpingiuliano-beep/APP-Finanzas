@@ -529,7 +529,7 @@ function htmlCargar() {
       ${fac ? `<div class="campo"><label>Vencimiento</label><input id="cVto" type="date" onchange="previa()"></div>${htmlFijoSel("cFijo")}`
             : `<div class="campo"><label>Tarjeta</label><select id="cTarjeta" onchange="previa()">${TARJETAS.map(x => `<option>${x}</option>`).join("")}</select></div>`}
     </div>
-    ${cuotas ? `<label class="tilde"><input type="checkbox" id="cFondo"><span>Se paga del fondo<small>La cuota se muestra pero no resta de tu sueldo: sale del fondo para cuotas.</small></span></label>` : ""}
+    ${fac ? "" : `<label class="tilde"><input type="checkbox" id="cFondo"><span>Se paga del fondo<small>Se muestra pero no resta de tu sueldo: sale del fondo para cuotas.</small></span></label>`}
     ${fac ? "" : `<label class="tilde"><input type="checkbox" id="cSig" onchange="previa()"><span>Siguiente resumen<small>Marcalo si el consumo fue después del cierre de la tarjeta: se empieza a pagar un mes más tarde.</small></span></label>`}
     <div class="nota" id="cNota"></div>
     <button class="btn" id="cBtn" onclick="enviarCarga()">Guardar</button>
@@ -636,7 +636,8 @@ function htmlItem(p, i) {
     ${campos}
     <div class="nota" id="iE${i}" style="margin-bottom:4px">${money2(p.monto)}</div>
     ${fac ? htmlFijoSel("iF" + i) : ""}
-    ${fac ? "" : `<label class="tilde"><input type="checkbox" id="iS${i}"><span>Siguiente resumen<small>Después del cierre de la tarjeta: se paga un mes más tarde.</small></span></label>`}
+    ${fac ? "" : `<label class="tilde"><input type="checkbox" id="iFo${i}"><span>Se paga del fondo<small>No resta de tu sueldo: sale del fondo para cuotas.</small></span></label>
+    <label class="tilde"><input type="checkbox" id="iS${i}"><span>Siguiente resumen<small>Después del cierre de la tarjeta: se paga un mes más tarde.</small></span></label>`}
     <div class="nota" id="iNota${i}"></div>
     <div class="acc"><button class="descartar" onclick="descartar(${i})">Descartar</button><button class="guardar" id="iG${i}" onclick="guardarItem(${i})">Guardar</button></div>
   </div>`;
@@ -648,7 +649,7 @@ async function guardarItem(i) {
   const fac = modoItems === "factura", nota = $("iNota" + i), btn = $("iG" + i);
   const n = fac ? 1 : Number($("iN" + i).value);
   const datos = { tipo: n >= 2 ? "cuotas" : "unico", concepto: $("iC" + i).value.trim(), monto: leerMonto($("iM" + i).value), cuotas: n,
-    tarjeta: fac ? "" : $("iT" + i).value, vencimiento: fac ? $("iV" + i).value : "", siguiente: fac ? false : $("iS" + i).checked };
+    tarjeta: fac ? "" : $("iT" + i).value, vencimiento: fac ? $("iV" + i).value : "", siguiente: fac ? false : $("iS" + i).checked, fondo: fac ? false : $("iFo" + i).checked };
   if (fac) Object.assign(datos, leerFijoSel("iF" + i));
   if (!datos.concepto || !(datos.monto > 0) || (fac ? !datos.vencimiento : !datos.tarjeta)) {
     nota.className = "nota mal"; nota.textContent = "Completá todos los campos."; return;
@@ -1150,6 +1151,7 @@ function htmlResDet() {
       <div class="campo"><label>Concepto</label><input id="rdC${i}" type="text" value="${esc(l.concepto)}"></div>
       <div class="fila"><div class="campo"><label>Monto</label><input id="rdM${i}" type="text" inputmode="decimal" value="${l.monto}"></div>
       <div class="campo"><label>${l.total > 1 ? "Cuotas que faltan (con esta)" : "Pago"}</label><input id="rdN${i}" type="number" min="1" max="36" value="${l.restantes}" ${l.total > 1 ? "" : "disabled"}></div></div>
+      <label class="tilde"><input type="checkbox" id="rdF${i}"><span>Se paga del fondo</span></label>
       <div class="nota">${l.total > 1 ? `Cuota ${l.actual} de ${l.total}` : "Un solo pago"}</div>
       <div class="acc"><button class="descartar" onclick="$('rd${i}').remove()">Ignorar</button><button class="guardar" id="rdG${i}" onclick="resAgregar(${i})">Agregar</button></div></div>`).join("");
   const sob = d.sobran.length ? `<div class="nota" style="margin-top:8px">Cargado en la app pero que no aparece en el detalle: ${d.sobran.map(x => esc(x.nombre) + " " + money(x.monto)).join(", ")}.</div>` : "";
@@ -1161,8 +1163,9 @@ async function resAgregar(i) {
   if (!concepto || !(monto > 0)) { alert("Revisá el concepto y el monto"); return; }
   btn.disabled = true;
   try {
-    await api("cargar", l.total > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: resCmp.tarjeta, primer: resCmp.mesKey }
-                                    : { tipo: "unico", concepto, monto, tarjeta: resCmp.tarjeta, pago: resCmp.mesKey });
+    const fondo = $("rdF" + i).checked;
+    await api("cargar", l.total > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: resCmp.tarjeta, primer: resCmp.mesKey, fondo }
+                                    : { tipo: "unico", concepto, monto, tarjeta: resCmp.tarjeta, pago: resCmp.mesKey, fondo });
     $("rd" + i).innerHTML = `<div class="nota ok">Agregado: ${esc(concepto)}</div>`;
     resCmp = await api("compararResumen", resDat);
     const ya = $("resDet").innerHTML; $("resCmp").innerHTML = htmlResCmp(); $("resDet").innerHTML = ya;
@@ -1182,6 +1185,7 @@ function resAjustar() {
     <div class="campo"><label>Concepto</label><input id="adC" type="text" value="Consumo sin cargar"></div>
     <div class="fila"><div class="campo"><label>Monto de cada cuota</label><input id="adM" type="text" inputmode="decimal" value="${dif}"></div>
     <div class="campo"><label>Cuotas que faltan (1 = un pago)</label><input id="adN" type="number" min="1" max="36" value="1"></div></div>
+    <label class="tilde"><input type="checkbox" id="adF"><span>Se paga del fondo</span></label>
     <div class="nota">Se suma a ${esc(c.tarjeta)} desde ${mesNombre(c.mesKey)} y la comparación se recalcula.</div>
     <div class="acc"><button class="descartar" onclick="$('resAdj').innerHTML=''">Cancelar</button><button class="guardar" id="adG" onclick="resAjustarGuardar()">Ajustar</button></div></div>`;
 }
@@ -1190,8 +1194,9 @@ async function resAjustarGuardar() {
   if (!concepto || !(monto > 0)) { alert("Revisá el concepto y el monto"); return; }
   $("adG").disabled = true;
   try {
-    await api("cargar", n > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: c.tarjeta, primer: c.mesKey }
-                              : { tipo: "unico", concepto, monto, tarjeta: c.tarjeta, pago: c.mesKey });
+    const fondo = $("adF").checked;
+    await api("cargar", n > 1 ? { tipo: "cuotas", existente: true, concepto, monto, restantes: n, tarjeta: c.tarjeta, primer: c.mesKey, fondo }
+                              : { tipo: "unico", concepto, monto, tarjeta: c.tarjeta, pago: c.mesKey, fondo });
     const det = $("resDet").innerHTML;
     resCmp = await api("compararResumen", resDat);
     $("resCmp").innerHTML = htmlResCmp(); $("resDet").innerHTML = det;

@@ -135,9 +135,10 @@ function leerConsumos() {
     const h = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Consumos");
     if (!h || h.getLastRow() < 2) return [];
     const out = [];
-    h.getRange(2, 1, h.getLastRow() - 1, 5).getValues().forEach(r => {
+    h.getRange(2, 1, h.getLastRow() - 1, 6).getValues().forEach(r => {
       if (!(r[0] instanceof Date) || !(Number(r[2]) > 0)) return;
-      out.push({ concepto: String(r[1]), monto: Number(r[2]), tarjeta: String(r[3] || ""), pago: textoMes(r[4]) || sumarMeses(mesKey(r[0]), 1) });
+      out.push({ concepto: String(r[1]), monto: Number(r[2]), tarjeta: String(r[3] || ""), pago: textoMes(r[4]) || sumarMeses(mesKey(r[0]), 1),
+        fondo: /^s[ií]$/i.test(String(r[5] || "").trim()) });
     });
     return out;
   });
@@ -172,17 +173,18 @@ function proyectar(n) {
       const off = c.primer ? Math.max(0, difMeses(hoyKey, c.primer)) : 0;
       if (k < off || k >= off + c.restantes) return;
       const item = { nombre: c.concepto, monto: c.monto, nota: "quedan " + (c.restantes - (k - off)) };
-      if (c.fondo) { delFondo.push(item); return; }
+      if (c.fondo) { item.tarjeta = c.tarjeta; delFondo.push(item); return; }
       if (/pr[eé]stamo/i.test(c.concepto)) { prestamo.push(item); return; }
       if (/termotanque/i.test(c.concepto)) descuento.push({ nombre: "Termotanque", monto: -c.monto });
       const t = c.tarjeta ? c.tarjeta.replace(/^tarjeta\s+/i, "") : "Otras cuotas";
       (porTarjeta[t] = porTarjeta[t] || []).push(item);
     });
+    consumos.filter(c => c.pago === key && c.fondo).forEach(c => delFondo.push({ nombre: c.concepto, monto: c.monto, nota: "un pago", tarjeta: c.tarjeta }));
     if (delFondo.length) secciones.splice(1, 0, { titulo: "Se paga del fondo", tipo: "fondo", items: delFondo });
     if (prestamo.length) secciones.push({ titulo: "Préstamo", tipo: "cuotas", items: prestamo });
     Object.keys(porTarjeta).sort().forEach(t => secciones.push({ titulo: "Cuotas " + t, tipo: "cuotas", items: porTarjeta[t] }));
     if (descuento.length) secciones.push({ titulo: "Descuento de alquiler", tipo: "cuotas", items: descuento });
-    const un = consumos.filter(c => c.pago === key).map(c => ({ nombre: c.concepto, monto: c.monto, nota: c.tarjeta }));
+    const un = consumos.filter(c => c.pago === key && !c.fondo).map(c => ({ nombre: c.concepto, monto: c.monto, nota: c.tarjeta }));
     if (un.length) secciones.push({ titulo: "Consumos de un pago", tipo: "unico", items: un });
 
     secciones.forEach(sc => { sc.total = sc.items.reduce((a, x) => a + x.monto, 0); });
@@ -345,6 +347,8 @@ function apiCargar(d) {
     const r = hoja.getLastRow();
     hoja.getRange(r, 5).setNumberFormat("@").setValue(pago);
     if (!hoja.getRange(1, 5).getValue()) hoja.getRange(1, 5).setValue("Mes de pago");
+    if (d.fondo) { hoja.getRange(r, 6).setValue("Sí"); if (!hoja.getRange(1, 6).getValue()) hoja.getRange(1, 6).setValue("Fondo"); }
+    MEMO = {};
     return { guardado: "unico", primerPago: pago };
   }
   throw new Error("Tipo desconocido");
@@ -929,6 +933,7 @@ function itemsTarjetaMes(tarjeta, key) {
   mes.secciones.forEach(sc => {
     if (sc.titulo === "Cuotas " + nom) sc.items.forEach(it => items.push({ nombre: it.nombre, monto: it.monto, tipo: "cuota", nota: it.nota }));
     if (sc.tipo === "unico") sc.items.forEach(it => { if (it.nota === tarjeta) items.push({ nombre: it.nombre, monto: it.monto, tipo: "unico", nota: "un pago" }); });
+    if (sc.tipo === "fondo") sc.items.forEach(it => { if (it.tarjeta === tarjeta) items.push({ nombre: it.nombre, monto: it.monto, tipo: it.nota === "un pago" ? "unico" : "cuota", nota: it.nota }); });
   });
   return { mes: mes, items: items };
 }
