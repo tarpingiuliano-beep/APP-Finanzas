@@ -311,7 +311,7 @@ async function borrarFac(i) {
 function recordatorios(d) {
   const r = d.recordatorios || [], rs = d.resumenes || [];
   if (!r.length && !rs.length) return "";
-  return `<h2>Falta cargar</h2><div class="card">` + rs.map(x => `<div class="venc"><div>Resumen ${esc(x.tarjeta)}<small>Cerró el ${fechaCorta(x.cerro)}</small></div>
+  return `<h2>Falta cargar</h2><div class="card">` + rs.map(x => `<div class="venc"><div>Resumen ${esc(x.tarjeta)}<small>Cerró el ${fechaCorta(x.cerro)} · falta agendar el vencimiento</small></div>
     <div style="display:flex;gap:6px"><button class="mini ir" onclick="cargar('deuda')">Cargar</button></div></div>`).join("") + r.map((x, i) => `<div class="venc"><div>${esc(x.concepto)}<small>Último vencimiento ${fechaCorta(x.ultimoVto)}</small></div>
     <div style="display:flex;gap:6px"><button class="mini" onclick="quitarRec(${i})">Ya no</button><button class="mini ir" onclick="irCargar(${i})">Cargar</button></div></div>`).join("") + `</div>`;
 }

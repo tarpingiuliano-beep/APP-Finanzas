@@ -1464,7 +1464,8 @@ function resumenesPendientes(hoy) {
     const debido = sumarMeses(mesKey(cierre), c.vto);   // mes en que vence el resumen que acaba de cerrar
     const k = Object.keys(cad).filter(x => normTxt(cad[x].nombre || x) === normTxt("Tarjeta " + t))[0];
     const vto = k ? aFecha(cad[k].vto) : null;
-    const cargado = (c.abierto && c.abierto > debido) || (vto && mesKey(vto) >= debido);
+    // Cuenta como cargado solo cuando el vencimiento está agendado (factura): comparar el resumen no alcanza para que avise.
+    const cargado = !!(vto && mesKey(vto) >= debido);
     if (cargado) return;
     out.push({ tarjeta: t, cerro: fechaTxt(cierre), dias: Math.round((hoy - cierre) / 86400000) });
   });
@@ -1635,5 +1636,5 @@ function fondoAvisos(hoy) {
 // Recordatorio de resúmenes de tarjeta sin cargar: el día siguiente al cierre y cada 2 días.
 function avisosResumenes(hoy) {
   const p = resumenesPendientes(hoy).filter(x => x.dias >= 1 && x.dias % 2 === 1);
-  return p.length ? [["💳 Cargá el resumen", p.map(x => "• " + x.tarjeta + " (cerró el " + x.cerro.slice(8) + "/" + x.cerro.slice(5, 7) + ")").join("\n") + "\n\nEntrá a la app → Deuda → Resumen de tarjeta."]] : [];
+  return p.length ? [["💳 Agendá el vencimiento del resumen", p.map(x => "• " + x.tarjeta + " (cerró el " + x.cerro.slice(8) + "/" + x.cerro.slice(5, 7) + ")").join("\n") + "\n\nEntrá a la app → Deuda → Resumen de tarjeta → Agendar vencimiento."]] : [];
 }
